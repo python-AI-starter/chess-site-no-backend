@@ -29,7 +29,10 @@
       g: null, legal: [], myColor: null, board: null,
       chans: [], pendingMove: false, flagClaimed: false, destroyed: false,
       stm: "w", oppDeadline: null, chatEl: null,
-      chatInit: false, chatSub: false, gameSub: false
+      chatInit: false, chatSub: false, gameSub: false,
+      replay: null, replayPly: null, keyHandler: null,
+      premove: null,           // { from, to, promo } — ход «в уме» (uci-имена клеток)
+      chatSeen: new Set(), lastChatTs: null
     };
 
     container.innerHTML = `<div class="card center"><span class="spinner"></span> Загрузка партии…</div>`;
@@ -58,18 +61,71 @@
     async function applyState(g, legal, fromRemote) {
       if (S.destroyed) return;
       const wasOver = S.g && S.g.status !== "active" && S.g.status !== "waiting";
+      const oldLen = S.g ? (S.g.moves || []).length : 0;
       S.g = g;
       S.legal = legal || [];
       S.myColor = !me ? null : (g.white === me.id ? "white" : (g.black === me.id ? "black" : null));
       derive(g);
+      // партия кончилась / откат — премув больше не имеет смысла
+      if (g.status !== "active" || !S.myColor) clearPremoveState(false);
+      // смотрим историю (перемотка) — доску не дёргаем, обновляем только список ходов
+      if (S.replayPly != null) { movesList(); return; }
       drawGame();
+
+      // звук хода соперника (свой ход озвучивается в onMove)
+      const mv = g.moves || [];
+      if (fromRemote && mv.length > oldLen && S.myColor) {
+        const lastPlyWhite = mv.length % 2 === 1; // 1-й полуход — белые
+        const oppMoved = (S.myColor === "white") ? !lastPlyWhite : lastPlyWhite;
+        if (oppMoved) {
+          const san = mv[mv.length - 1].s || "";
+          if (/x/.test(san)) U.soundCapture(); else U.soundMove();
+        }
+      }
+
+      // ПРЕМУВ: соперник сходил — пробуем сыграть заряженный ход
+      tryPremove();
 
       // чат становится доступен, как только я стал участником активной партии
       if (me && S.myColor && !S.chatInit) initChat();
 
+      // партия завершилась на наших глазах — включаем перемотку
+      if ((g.status === "finished" || g.status === "aborted") && !S.replay) initReplay();
+
       if (!wasOver && g.status === "finished" || g.status === "aborted") {
         if (!wasOver && fromRemote) U.soundEnd();
       }
+    }
+
+    // ---------- премувы ----------
+    function setPremoveState(p) {
+      S.premove = p; // { from, to, promo } | null (имена клеток)
+      S.board.setPremove(p);
+      drawStatus();
+    }
+    function clearPremoveState(redraw) {
+      if (!S.premove) return;
+      S.premove = null;
+      S.board.setPremove(null);
+      if (redraw !== false) drawStatus();
+    }
+    function tryPremove() {
+      const p = S.premove;
+      if (!p || S.destroyed || S.pendingMove || !S.g || S.g.status !== "active") {
+        if (S.g && S.g.status !== "active") clearPremoveState(false);
+        return;
+      }
+      const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
+      if (!myTurn) return;
+      // соперник сходил — отправляем премув; легальность проверит сервер.
+      clearPremoveState(false);           // снять подсветку заранее
+      onMove(p.from, p.to, p.promo);  // обычная отправка хода
+    }
+    async function onPremove(from, to, promo) {
+      if (!S.myColor || !S.g || S.g.status !== "active") return;
+      setPremoveState({ from, to, promo: promo || null });
+      // если ход уже мой (гонка с тикером) — сыграть немедленно
+      tryPremove();
     }
 
     async function refetch() {
@@ -90,6 +146,7 @@
         <div class="card">
           <h3 class="spread row">Ходы <button class="btn ghost small" id="flip">⇅ Развернуть</button></h3>
           <div class="moves-list" id="moves"></div>
+          <div class="replay-bar" id="replaybar" style="display:none"></div>
           <div class="game-actions" id="actions"></div>
           <div id="drawbox"></div>
         </div>
@@ -110,8 +167,12 @@
 
     S.board = new ChessBoard(U.qs("#board", root), {
       onMove: onMove,
+      onPremove: onPremove,
+      onPremoveCancel: () => { S.premove = null; drawStatus(); },
       canMove: () => S.g && S.g.status === "active" && S.myColor && !S.pendingMove &&
                      ((S.stm === "w") === (S.myColor === "white")),
+      canPremove: () => S.g && S.g.status === "active" && S.myColor && !S.pendingMove &&
+                        !((S.stm === "w") === (S.myColor === "white")),
       myColor: () => S.myColor
     });
 
@@ -151,17 +212,82 @@
 
     function movesList() {
       const mv = (S.g.moves || []);
+      const curPly = S.replayPly != null ? S.replayPly : mv.length;
       const rows = [];
       for (let i = 0; i < mv.length; i += 2) {
-        const cur = i + 1 === mv.length;
-        rows.push(`<tr class="${cur ? "cur" : ""}"><td class="num">${i / 2 + 1}.</td>
-          <td>${U.esc(mv[i].s)}</td><td>${mv[i + 1] ? U.esc(mv[i + 1].s) : ""}</td></tr>`);
+        const plyW = i + 1, plyB = i + 2;
+        rows.push(`<tr><td class="num">${i / 2 + 1}.</td>
+          <td data-ply="${plyW}" class="${plyW === curPly ? "cur" : ""}">${U.esc(mv[i].s)}</td>
+          <td data-ply="${plyB}" class="${plyB === curPly ? "cur" : ""}">${mv[i + 1] ? U.esc(mv[i + 1].s) : ""}</td></tr>`);
       }
       U.qs("#moves", root).innerHTML = rows.length
         ? `<table>${rows.join("")}</table>`
         : `<div class="empty">Партия только началась</div>`;
+      if (S.replay) {
+        U.qsa("#moves td[data-ply]", root).forEach(td =>
+          td.addEventListener("click", () => seekReplay(Number(td.dataset.ply))));
+      }
       const list = U.qs("#moves", root);
-      list.scrollTop = list.scrollHeight;
+      if (S.replayPly == null || S.replayPly >= mv.length) list.scrollTop = list.scrollHeight;
+    }
+
+    // ---------- перемотка завершённой партии ----------
+    function lastUci() {
+      const mv = S.g.moves || [];
+      return mv.length ? mv[mv.length - 1].u : null;
+    }
+    async function initReplay() {
+      if (S.replay || !S.g || (S.g.status !== "finished" && S.g.status !== "aborted")) return;
+      const { data } = await API.getReplay(gameId);
+      if (!data || !data.ok || S.destroyed) return;
+      S.replay = data;
+      S.replayPly = (data.fens || []).length;
+      drawReplayBar();
+      movesList();
+    }
+    function drawReplayBar() {
+      const bar = U.qs("#replaybar", root);
+      bar.style.display = "";
+      bar.innerHTML = `
+        <button class="btn ghost small" data-rp="first" title="В начало">|&#9664;</button>
+        <button class="btn ghost small" data-rp="prev" title="Назад">&#9664;</button>
+        <button class="btn ghost small" data-rp="next" title="Вперёд">&#9654;</button>
+        <button class="btn ghost small" data-rp="last" title="В конец">&#9654;|</button>
+        <span class="muted small" id="replay-pos"></span>
+        <span class="muted small">· стрелки ← → перематывают</span>`;
+      U.qsa("button[data-rp]", bar).forEach(b => b.addEventListener("click", () => {
+        const a = b.dataset.rp;
+        if (a === "first") seekReplay(0);
+        else if (a === "prev") seekReplay(S.replayPly - 1);
+        else if (a === "next") seekReplay(S.replayPly + 1);
+        else if (a === "last") seekReplay((S.replay.fens || []).length);
+      }));
+      updateReplayPos();
+      S.keyHandler = (e) => {
+        if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+        if (e.key === "ArrowLeft") { seekReplay(S.replayPly - 1); e.preventDefault(); }
+        else if (e.key === "ArrowRight") { seekReplay(S.replayPly + 1); e.preventDefault(); }
+      };
+      document.addEventListener("keydown", S.keyHandler);
+    }
+    function updateReplayPos() {
+      const el = U.qs("#replay-pos", root);
+      if (el) el.textContent = `${S.replayPly} / ${(S.replay.fens || []).length}`;
+    }
+    function seekReplay(ply) {
+      if (!S.replay) return;
+      const total = (S.replay.fens || []).length;
+      S.replayPly = Math.max(0, Math.min(total, ply));
+      if (S.replayPly === total) {
+        S.board.setPosition(S.g.fen, { lastMove: lastUci() ? [lastUci().slice(0, 2), lastUci().slice(2, 4)] : null, checkSq: checkSquare() });
+      } else {
+        const u = S.replayPly > 0 ? ((S.replay.moves || [])[S.replayPly - 1] || {}).u : null;
+        const fen = S.replayPly === 0 ? S.replay.start_fen : S.replay.fens[S.replayPly - 1];
+        S.board.setPosition(fen, { lastMove: u ? [u.slice(0, 2), u.slice(2, 4)] : null });
+      }
+      S.board.setInteractive(false);
+      updateReplayPos();
+      movesList();
     }
 
     function checkSquare() {
@@ -255,24 +381,35 @@
         else if (g.result === "0-1") txt = "0–1 · победа чёрных";
         else txt = "½–½";
         const rd = g.rating_delta || null;
+        // дельта пула (блиц/рапид/классика) приоритетнее общей
         const myDelta = rd && me ? (g.white === me.id ? rd.white : rd.black) : null;
+        const myDeltaClass = rd && me ? (g.white === me.id ? rd.white_class : rd.black_class) : null;
+        const shownDelta = myDeltaClass != null ? myDeltaClass : myDelta;
+        const poolName = rd && rd.class === "blitz" ? "блиц" : rd && rd.class === "rapid" ? "быстрые"
+                       : rd && rd.class === "classic" ? "классика" : "";
         c.innerHTML = `
           <div class="result-banner ${cls}">${txt}</div>
           <p class="small muted center">${U.esc(REASONS[g.reason] || "")}
-          ${g.rated && myDelta != null && myDelta !== 0 ?
-            ` · Рейтинг: <b>${myDelta > 0 ? "+" : ""}${myDelta}</b>` : ""}</p>
+          ${g.rated && shownDelta != null && shownDelta !== 0 ?
+            ` · Рейтинг${poolName ? " (" + poolName + ")" : ""}: <b>${shownDelta > 0 ? "+" : ""}${shownDelta}</b>` : ""}</p>
           ${me && g.winner && g.winner !== me.id && g.reason === "fraud" ?
             `<p class="small center good">Соперник заблокирован навсегда за попытку обмана.</p>` : ""}`;
         return;
       }
       // active
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
+      const prenote = S.premove
+        ? `<div class="draw-box premove-box"><span>Премув: <b>${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}</b> — сыграет после хода соперника</span>
+           <button class="btn ghost small" id="pm-cancel">Отменить</button></div>`
+        : "";
       c.innerHTML = `<div class="center">
         ${S.pendingMove ? `<span class="spinner"></span> Ход отправляется…` :
           myTurn ? `<b>Ваш ход</b>` :
-          S.myColor ? `<span class="muted">Ход соперника</span>` :
+          S.myColor ? `<span class="muted">Ход соперника — можно зарядить премув</span>` :
           `<span class="muted">Просмотр партии</span>`}
-      </div>`;
+      </div>${prenote}`;
+      const pmc = U.qs("#pm-cancel", c);
+      if (pmc) pmc.addEventListener("click", () => { setPremoveState(null); });
     }
 
     function drawActions() {
@@ -415,9 +552,26 @@
     const chatCard = U.qs("#chat-card", root);
     const chatLog = U.qs("#chat-log", root);
     function chatMsg(m) {
+      if (S.chatSeen.has(m.id)) return; // realtime + poll могут дублировать
+      S.chatSeen.add(m.id);
       const d = U.el(`<div class="chat-msg"><b>${U.esc(m.p && m.p.username || "?")}:</b> ${U.esc(m.body)}</div>`);
+      const empty = chatLog.querySelector(".empty");
+      if (empty) empty.remove();
       chatLog.appendChild(d);
       chatLog.scrollTop = chatLog.scrollHeight;
+    }
+    async function fetchNewChat() {
+      if (!S.g || S.destroyed) return;
+      const { data } = await API.sb.from("game_chat")
+        .select("*, p:profiles(username)")
+        .eq("game_id", S.g.id).order("created_at");
+      (data || []).forEach((m) => {
+        if (S.chatSeen.has(m.id)) return;
+        const isNew = S.lastChatTs && U.parseTs(m.created_at) > S.lastChatTs;
+        chatMsg(m);
+        if (isNew && m.user_id !== (me && me.id)) U.soundMove();
+      });
+      if (data && data.length) S.lastChatTs = U.parseTs(data[data.length - 1].created_at);
     }
     async function initChat() {
       if (S.chatInit || !me || !S.g || !S.myColor) return; // чат только для участников (RLS и так режет)
@@ -428,6 +582,7 @@
         .select("*, p:profiles(username)")
         .eq("game_id", S.g.id).order("created_at");
       (data || []).forEach(chatMsg);
+      if (data && data.length) S.lastChatTs = U.parseTs(data[data.length - 1].created_at);
       U.qs("#chat-send", root).addEventListener("click", sendChat);
       U.qs("#chat-text", root).addEventListener("keydown", (e) => {
         if (e.key === "Enter") sendChat();
@@ -442,18 +597,41 @@
       if (error) { U.toast(error.message, "error"); inp.value = body; }
     }
 
-    // ---------- realtime ----------
+    // ---------- realtime + fallback-поллинг ----------
+    // Realtime — мгновенная доставка; поллинг — страховка, если websocket
+    // недоступен (сеть/прокси/старый браузер). Дубли отсекаются stateKey/chatSeen.
+    const pollTimer = API.poll(2500, async () => {
+      if (S.destroyed || !S.g) return;
+      if (S.pendingMove) return; // свой ход уже летит — не мешаем
+      try {
+        const { data } = await API.gameState(gameId);
+        if (!data || !data.ok || S.destroyed) return;
+        if (API.stateKey(data.game) !== API.stateKey(S.g)) {
+          applyState(data.game, data.legal_moves || [], true);
+        }
+      } catch (e) { /* сеть моргнула — попробуем в следующий тик */ }
+    });
+    const chatPollTimer = API.poll(3000, fetchNewChat);
+
+    // отладочный режим ?nort=1 — отключить realtime (проверка чистого поллинга)
+    const NO_RT = /(?:^|[?&])nort=1/.test(location.search);
+
     function subscribe() {
-      if (!S.g || S.gameSub) return;
+      if (NO_RT || !S.g || S.gameSub) return;
       S.gameSub = true;
       API.unsubscribe(S.chans.pop());
       S.chans.push(API.subscribeGame(S.g.id, (row) => {
-        applyState(row, S.g.status === "active" ? S.legal : [], true);
-        if (row.status === "active" && (!S.legal || !S.legal.length)) refetch();
+        if (API.stateKey(row) === API.stateKey(S.g)) return; // дубликат после poll
+        // позиция изменилась -> старый список легальных ходов недействителен,
+        // свежий придёт refetch-ом (иначе доска «залипает» на чужих ходах)
+        const changed = (row.moves || []).length !== (S.g.moves || []).length ||
+                        row.status !== S.g.status;
+        applyState(row, changed ? [] : S.legal, true);
+        if (changed && row.status === "active") refetch();
       }));
     }
     function subscribeChatChan() {
-      if (!me || !S.g || !S.myColor || S.chatSub) return;
+      if (NO_RT || !me || !S.g || !S.myColor || S.chatSub) return;
       S.chatSub = true;
       S.chans.push(API.subscribeChat(S.g.id, (row) => {
         chatMsg({ ...row, p: { username: (S.names && S.names[row.user_id]) || (row.user_id === me.id ? myProfile.username : "?") } });
@@ -473,10 +651,14 @@
     await loadNames();
     await initChat();
     subscribe();
+    initReplay(); // реплей для завершённых партий
 
     return function cleanup() {
       S.destroyed = true;
       clearInterval(ticker);
+      pollTimer();
+      chatPollTimer();
+      if (S.keyHandler) document.removeEventListener("keydown", S.keyHandler);
       S.chans.forEach(API.unsubscribe);
     };
   };

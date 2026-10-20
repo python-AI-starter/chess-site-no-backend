@@ -1,5 +1,6 @@
 // ============================================================
-//  Лобби: быстрый поиск, вызовы по ссылке, мои партии
+//  Лобби: быстрый поиск, вызовы по ссылке, мои партии,
+//  открытые вызовы (видны и гостям) и ОБЩИЙ ЧАТ на главной.
 // ============================================================
 (function () {
   "use strict";
@@ -17,21 +18,26 @@
   ];
 
   const LobbyPage_render = async function (container) {
+    container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const me = await API.user();
-    const profile = me ? await API.profile(me.id) : null;
 
     container.innerHTML = `
       <h1>Играть</h1>
-      ${!me ? `<div class="card center">
+      ${!me ? `
+        <div class="card center">
           <h2>Добро пожаловать в «Ладью» &#9820;</h2>
           <p class="muted">Свободные онлайн-шахматы: валидация ходов прямо в PostgreSQL,
-          рейтинг Эло, чат, форум, клубы и блог.</p>
+          рейтинг Эло, общий чат, личные сообщения, форум, клубы и блог.</p>
           <div class="row" style="justify-content:center">
             <a class="btn primary big" href="#/signup">Регистрация</a>
             <a class="btn big" href="#/login">Вход</a>
           </div>
+        </div>
+        <div class="card">
+          <h2>Открытые вызовы</h2>
+          <div id="open-list"><span class="spinner"></span></div>
         </div>` : `
-        ${myGamesHtml()}
+        <div class="card hidden" id="my-games"></div>
         <div class="grid2">
           <div class="card">
             <h2>Быстрая игра</h2>
@@ -71,14 +77,50 @@
           <h2>Открытые вызовы</h2>
           <div id="open-list"><span class="spinner"></span></div>
         </div>`}
+      <div class="card">
+        <h2>Общий чат</h2>
+        <div id="global-chat"></div>
+      </div>
     `;
 
-    if (!me) return () => {};
+    // ---------- общий чат (для всех: гости читают) ----------
+    const gcCleanup = Social.globalChat(U.qs("#global-chat"));
+    let disposed = false;
+    const cleanupFns = [() => { if (!disposed) gcCleanup(); }];
+
+    if (!me) {
+      // гости: открытые вызовы только для просмотра
+      async function loadOpenGuest() {
+        const box = U.qs("#open-list");
+        if (!box) return;
+        const { data } = await API.sb.from("games")
+          .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
+          .eq("status", "waiting").is("invitee", null)
+          .gte("created_at", new Date(Date.now() - 3600 * 1000).toISOString())
+          .order("created_at", { ascending: false })
+          .limit(20);
+        const rows = (data || []).map(g => {
+          const host = g.white ? g.wp : g.bp;
+          const hostId = g.white || g.black;
+          return `<tr>
+            <td><a href="#/profile/${hostId}">${U.esc(host ? host.username : "?")}</a>
+                <span class="muted">(${host ? host.rating : "?"})</span></td>
+            <td><b>${U.fmtTc(g.initial_ms, g.increment_ms)}</b></td>
+            <td>${g.rated ? '<span class="badge rated">рейтинг</span>' : '<span class="badge">дружеская</span>'}</td>
+            <td><a class="btn small" href="#/login">Войти</a></td>
+          </tr>`;
+        });
+        box.innerHTML = rows.length
+          ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
+          : `<div class="empty">Пока нет открытых вызовов</div>`;
+      }
+      loadOpenGuest();
+      const t = setInterval(loadOpenGuest, 5000);
+      cleanupFns.push(() => clearInterval(t));
+      return function cleanup() { cleanupFns.forEach(f => f()); };
+    }
 
     // ---------- мои активные партии ----------
-    function myGamesHtml() {
-      return `<div class="card hidden" id="my-games"></div>`;
-    }
     async function loadMyGames() {
       const box = U.qs("#my-games");
       if (!box) return;
@@ -155,26 +197,29 @@
       const box = U.qs("#open-list");
       if (!box) return;
       const { data } = await API.sb.from("games")
-        .select("id,white,black,rated,initial_ms,increment_ms,created_at,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
+        .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
         .eq("status", "waiting")
         .gte("created_at", new Date(Date.now() - 3600 * 1000).toISOString())
         .order("created_at", { ascending: false })
         .limit(20);
-      const rows = (data || []).map(g => {
-        const isHost = g.white === me.id || g.black === me.id;
-        const host = g.white ? g.wp : g.bp;
-        const hostId = g.white || g.black;
-        const myColor = g.white === me.id ? "белые" : (g.black === me.id ? "чёрные" : null);
-        return `<tr>
+      const rows = (data || [])
+        .filter(g => !g.invitee || g.invitee === me.id)
+        .map(g => {
+          const isHost = g.white === me.id || g.black === me.id;
+          const host = g.white ? g.wp : g.bp;
+          const hostId = g.white || g.black;
+          const invited = g.invitee && g.invitee === me.id;
+          return `<tr>
           <td><a href="#/profile/${hostId}">${U.esc(host ? host.username : "?")}</a>
-              <span class="muted">(${host ? host.rating : "?"})</span></td>
+              <span class="muted">(${host ? host.rating : "?"})</span>
+              ${invited ? '<span class="badge active">вас приглашают</span>' : ""}</td>
           <td><b>${U.fmtTc(g.initial_ms, g.increment_ms)}</b></td>
           <td>${g.rated ? '<span class="badge rated">рейтинг</span>' : '<span class="badge">дружеская</span>'}</td>
           <td>${isHost
             ? `<a class="btn small" href="#/game/${g.id}">Открыть</a>`
             : `<button class="btn primary small" data-join="${g.id}">Принять</button>`}</td>
         </tr>`;
-      });
+        });
       box.innerHTML = rows.length
         ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
         : `<div class="empty">Пока нет открытых вызовов — создайте свой!</div>`;
@@ -187,10 +232,21 @@
     loadOpen();
     const openTimer = setInterval(loadOpen, 5000);
 
+    // realtime: новый вызов появляется мгновенно (поллинг — страховка)
+    let rtDebounce = null;
+    const rtChan = API.subscribeInserts("games", null, () => {
+      clearTimeout(rtDebounce);
+      rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 300);
+    });
+
     return function cleanup() {
+      disposed = true;
       if (seekTimer) clearInterval(seekTimer);
       clearInterval(openTimer);
+      clearTimeout(rtDebounce);
+      API.unsubscribe(rtChan);
       if (seeking) API.cancelSeek();
+      cleanupFns.forEach(f => f());
     };
   };
 

@@ -247,11 +247,15 @@
 
     // ---------- чат клуба ----------
     const chans = [];
+    const stops = [];
     if (canChat) {
       const log = U.qs("#club-chat-log");
       const names = {};
+      const seen = new Set();
       (members || []).forEach(m => { if (m.p) names[m.user_id] = m.p.username; });
       const addMsg = (m) => {
+        if (seen.has(m.id)) return; // realtime + poll могут дублировать
+        seen.add(m.id);
         const name = (m.p && m.p.username) || names[m.user_id] || "?";
         const d = U.el(`<div class="chat-msg"><b>${U.esc(name)}:</b> ${U.esc(m.body)}</div>`);
         log.appendChild(d);
@@ -277,8 +281,20 @@
         addMsg(row);
         U.soundMove();
       }));
+      // fallback-поллинг (если websocket недоступен)
+      stops.push(API.poll(4000, async () => {
+        const { data: fresh } = await API.sb.from("club_chat")
+          .select("*, p:profiles(username)").eq("club_id", clubId)
+          .order("created_at", { ascending: false }).limit(30);
+        if (!fresh) return;
+        for (const m of fresh.reverse()) {
+          if (seen.has(m.id)) continue;
+          if (m.p) names[m.user_id] = m.p.username;
+          addMsg(m);
+        }
+      }));
     }
-    return function cleanup() { chans.forEach(API.unsubscribe); };
+    return function cleanup() { stops.forEach(s => s()); chans.forEach(API.unsubscribe); };
   };
 
   // ================= БЛОГ =================

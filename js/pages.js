@@ -1,8 +1,19 @@
 // ============================================================
 //  Страницы: вход/регистрация, профиль, лидерборд
+//  Рейтинг: онлайн-пульс, вызов игрока, последние партии
+//  с перемоткой ходов (реплей).
 // ============================================================
 (function () {
   "use strict";
+
+  // онлайн: heartbeat раз в 30 с + запас
+  function isOnline(p) {
+    if (!p || !p.last_seen_at) return false;
+    return (ServerTime.now() - U.parseTs(p.last_seen_at)) < 75000;
+  }
+
+  const dotHtml = (p) =>
+    `<span class="online-dot ${isOnline(p) ? "" : "off"}" title="${isOnline(p) ? "онлайн" : "офлайн"}"></span>`;
 
   // ---------- ВХОД ----------
   const LoginPage_render = function (container) {
@@ -65,11 +76,47 @@
       } else {
         U.infoModal(`<h3>Подтвердите email</h3>
           <p>Мы отправили письмо на <b>${U.esc(email)}</b>.
-          Перейдите по ссылке из письма, затем войдите.</p>`);
+          Перейдите по ссылке из письма — <b>вы войдёте на сайт автоматически</b>,
+          вводить логин и пароль не нужно.</p>
+          <p class="muted small">Если сайт открыт по другому адресу, ссылка приведёт
+          на <b>http://localhost:3000</b> — запускайте сайт на этом порту
+          (например, <code>python -m http.server 3000</code>).</p>`);
         location.hash = "#/login";
       }
     }
   };
+
+  // ---------- ВЫЗОВ ИГРОКА (общая модалка) ----------
+  const TC_OPTIONS = [
+    [60000, 0, "1+0 · Пуля"], [120000, 1000, "2+1 · Пуля"],
+    [180000, 0, "3+0 · Блиц"], [180000, 2000, "3+2 · Блиц"], [300000, 0, "5+0 · Блиц"],
+    [600000, 0, "10+0 · Быстрые"], [900000, 10000, "15+10 · Быстрые"],
+    [1800000, 0, "30+0 · Классика"], [1800000, 20000, "30+20 · Классика"]
+  ];
+
+  async function challengeModal(target) {
+    const res = await U.formModal(`Вызов: ${target.username}`, [
+      { id: "tc", label: "Контроль времени", type: "select",
+        value: "600000|0",
+        options: TC_OPTIONS.map(o => ({ v: `${o[0]}|${o[1]}`, l: o[2] })) },
+      { id: "color", label: "Ваш цвет", type: "select", value: "random",
+        options: [{ v: "random", l: "Случайный" }, { v: "white", l: "Белые" }, { v: "black", l: "Чёрные" }] },
+      { id: "rated", label: "Тип партии", type: "select", value: "1",
+        options: [{ v: "1", l: "Рейтинговая" }, { v: "0", l: "Товарищеская" }] }
+    ], "Вызвать");
+    if (!res) return;
+    const [ms, inc] = res.tc.split("|").map(Number);
+    const rated = res.rated === "1";
+    const { data: gid, error } = await API.createChallenge(ms, inc, rated, res.color, target.id);
+    if (error) return U.toast(error.message, "error");
+    // приглашение в личку (не критично, если не уйдёт)
+    API.sendDm(target.id,
+      `⚔ Вызываю вас на партию ${U.fmtTc(ms, inc)} (${rated ? "рейтинговая" : "товарищеская"}). ` +
+      `Принять: #/game/${gid}`)
+      .then(({ error: e2 }) => { if (e2) console.warn(e2.message); });
+    U.toast("Вызов отправлен — игрок получит личное сообщение", "good");
+    location.hash = `#/game/${gid}`;
+  }
 
   // ---------- ПРОФИЛЬ ----------
   const ProfilePage_render = async function (container, userId) {
@@ -93,14 +140,21 @@
           <div class="row">
             <span class="avatar big">${U.esc((p.username || "?")[0].toUpperCase())}</span>
             <div>
-              <h2 style="margin:0">${U.esc(p.username)} ${p.is_banned ? '<span class="badge danger">заблокирован</span>' : ""}</h2>
+              <h2 style="margin:0">${U.esc(p.username)} ${dotHtml(p)} ${p.is_banned ? '<span class="badge danger">заблокирован</span>' : ""}</h2>
               <span class="muted small">На сайте с ${U.fmtDate(p.created_at)}</span>
             </div>
           </div>
-          ${own ? `<button class="btn" id="p-rename">Сменить ник</button>` : ""}
+          <div class="row">
+            ${!own && me ? `<button class="btn" id="p-dm">✉ Написать</button>
+                            <button class="btn primary" id="p-challenge">⚔ Вызвать</button>` : ""}
+            ${own ? `<button class="btn" id="p-rename">Сменить ник</button>` : ""}
+          </div>
         </div>
         <div class="stat-cards" style="margin-top:16px">
-          <div class="stat-card"><b>${p.rating}</b><span>Рейтинг Эло</span></div>
+          <div class="stat-card"><b>${p.rating}</b><span>Общий Эло</span></div>
+          <div class="stat-card"><b>${p.rating_blitz ?? 1000}</b><span>Блиц</span></div>
+          <div class="stat-card"><b>${p.rating_rapid ?? 1000}</b><span>Быстрые</span></div>
+          <div class="stat-card"><b>${p.rating_classic ?? 1000}</b><span>Классика</span></div>
           <div class="stat-card"><b>${p.games}</b><span>Партий ${wld}</span></div>
           <div class="stat-card"><b>${p.games ? Math.round(100 * p.wins / p.games) : 0}%</b><span>Побед</span></div>
         </div>
@@ -110,6 +164,10 @@
         <div id="recent"></div>
       </div>`;
 
+    if (!own && me) {
+      U.qs("#p-dm").addEventListener("click", () => { location.hash = `#/dm/${p.id}`; });
+      U.qs("#p-challenge").addEventListener("click", () => challengeModal(p));
+    }
     if (own) {
       U.qs("#p-rename").addEventListener("click", async () => {
         const res = await U.formModal("Сменить ник", [
@@ -149,33 +207,141 @@
     return () => {};
   };
 
-  // ---------- ЛИДЕРБОРД ----------
+  // ---------- ЛИДЕРБОРД (пулы: блиц / быстрые / классика) ----------
+  let openReplay = null; // единственный раскрытый реплей
+  const POOLS = [
+    { key: "blitz",   label: "Блиц",     col: "rating_blitz",   games: "games_blitz" },
+    { key: "rapid",   label: "Быстрые",  col: "rating_rapid",   games: "games_rapid" },
+    { key: "classic", label: "Классика", col: "rating_classic", games: "games_classic" }
+  ];
+
+  function currentPool() {
+    const k = localStorage.getItem("ladya-pool");
+    return POOLS.find(p => p.key === k) || POOLS[0];
+  }
+
+  async function expandReplay(slot, gameId) {
+    slot.innerHTML = `<div class="center" style="padding:10px"><span class="spinner"></span> Загрузка…</div>`;
+    const { data, error } = await API.getReplay(gameId);
+    if (error || !data || !data.ok) {
+      slot.innerHTML = `<div class="empty">Не удалось загрузить партию</div>`;
+      return;
+    }
+    slot.innerHTML = "";
+    const wrap = document.createElement("div");
+    slot.appendChild(wrap);
+    openReplay = new ChessReplay(wrap, { replay: data, orientation: "white", keyboard: true });
+  }
+
   const LeaderboardPage_render = async function (container) {
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
-    const { data } = await API.sb.from("profiles")
-      .select("id,username,rating,games,wins,losses,draws,is_banned")
-      .order("rating", { ascending: false })
-      .limit(50);
+    const me = App.user || await API.user();
+    const pool = currentPool();
+    const [{ data }, { data: recent }] = await Promise.all([
+      API.sb.from("profiles")
+        .select(`id,username,rating,games,wins,losses,draws,is_banned,last_seen_at,${pool.col},${pool.games}`)
+        .order(pool.col, { ascending: false }).limit(50),
+      API.sb.from("games")
+        .select("id,white,black,result,winner,initial_ms,increment_ms,rated,finished_at,wp:profiles!games_white_fkey(username),bp:profiles!games_black_fkey(username)")
+        .eq("status", "finished")
+        .order("finished_at", { ascending: false }).limit(12)
+    ]);
+
+    const tabs = `<div class="pool-tabs">` + POOLS.map(p =>
+      `<button class="pool-tab ${p.key === pool.key ? "active" : ""}" data-pool="${p.key}">${p.label}</button>`
+    ).join("") + `</div>`;
+
+    const rows = (data || []).filter(p => !p.is_banned).map((p, i) => `
+      <tr>
+        <td class="muted"><span class="rank-num">${i + 1}</span></td>
+        <td><span class="lb-player">${dotHtml(p)}
+          <a href="#/profile/${p.id}">${U.esc(p.username)}</a></span></td>
+        <td class="rt"><b>${p[pool.col]}</b></td>
+        <td class="rt">${p[pool.games]}</td>
+        <td class="rt">${me && me.id !== p.id
+          ? `<button class="btn small" data-chal="${p.id}">⚔ Вызов</button>` : ""}</td>
+      </tr>`).join("");
+
     container.innerHTML = `
       <div class="card">
         <h2>Лидерборд</h2>
-        ${(data || []).length ? `<table class="lb-table">
-          <tr><th>#</th><th>Игрок</th><th class="rt">Рейтинг</th><th class="rt">Партий</th><th class="rt">Победы</th></tr>
-          ${data.filter(p => !p.is_banned).map((p, i) => `
-            <tr><td class="muted"><span class="rank-num">${i + 1}</span></td>
-            <td><a href="#/profile/${p.id}">${U.esc(p.username)}</a></td>
-            <td class="rt"><b>${p.rating}</b></td>
-            <td class="rt">${p.games}</td>
-            <td class="rt">${p.wins}</td></tr>`).join("")}
+        ${tabs}
+        ${rows ? `<table class="lb-table">
+          <tr><th>#</th><th>Игрок</th><th class="rt">Рейтинг · ${pool.label}</th><th class="rt">Партий</th><th></th></tr>
+          ${rows}
         </table>` : `<div class="empty">Пока никто не играл</div>`}
+      </div>
+      <div class="card">
+        <h2>Последние партии</h2>
+        <p class="muted small">Откройте партию и перематывайте ходы кнопками или стрелками ← →.</p>
+        <div id="lb-games">${renderRecent(recent || [])}</div>
       </div>`;
-    return () => {};
-  };
+
+    // переключение пулов — перерисовка таблицы
+    U.qsa(".pool-tab", container).forEach(b =>
+      b.addEventListener("click", () => {
+        localStorage.setItem("ladya-pool", b.dataset.pool);
+        Pages.leaderboard(container).catch(console.error);
+      }));
+
+    // кнопки вызова
+    const byId = {};
+    (data || []).forEach(p => { byId[p.id] = p; });
+    U.qsa("[data-chal]", container).forEach(b =>
+      b.addEventListener("click", () => {
+        const p = byId[b.dataset.chal];
+        if (p) challengeModal(p);
+      }));
+
+    // раскрытие реплеев
+    U.qsa("[data-watch]", container).forEach(b =>
+      b.addEventListener("click", () => {
+        const slot = U.qs(`#rp-${b.dataset.watch}`, container);
+        if (!slot) return;
+        if (!slot.classList.contains("hidden")) {
+          slot.classList.add("hidden");
+          b.textContent = "Смотреть ▸";
+          if (openReplay) { openReplay.destroy(); openReplay = null; }
+          return;
+        }
+        U.qsa(".rp-slot", container).forEach(s => s.classList.add("hidden"));
+        U.qsa("[data-watch]", container).forEach(x => x.textContent = "Смотреть ▸");
+        if (openReplay) { openReplay.destroy(); openReplay = null; }
+        slot.classList.remove("hidden");
+        b.textContent = "Свернуть ▴";
+        expandReplay(slot, b.dataset.watch);
+      }));
+
+    return () => {
+      if (openReplay) { openReplay.destroy(); openReplay = null; }
+    };
+  }
+
+  function renderRecent(games) {
+    if (!games.length) return `<div class="empty">Партий пока нет</div>`;
+    return games.map(g => `
+      <div class="lb-game">
+        <div class="list-item">
+          <span class="badge ${g.result === "1-0" ? "rated" : g.result === "0-1" ? "danger" : "finished"}">
+            ${g.result === "1-0" ? "1–0" : g.result === "0-1" ? "0–1" : "½–½"}</span>
+          <span style="flex:1;min-width:0">
+            <a href="#/profile/${g.white}">${U.esc(g.wp ? g.wp.username : "?")}</a>
+            <span class="muted"> — </span>
+            <a href="#/profile/${g.black}">${U.esc(g.bp ? g.bp.username : "?")}</a>
+            <span class="muted small">· ${U.fmtTc(g.initial_ms, g.increment_ms)}${g.rated ? " · рейтинг" : ""} · ${U.fmtDate(g.finished_at)}</span>
+          </span>
+          <a class="btn small" href="#/game/${g.id}">Партия</a>
+          <button class="btn small" data-watch="${g.id}">Смотреть ▸</button>
+        </div>
+        <div class="rp-slot hidden" id="rp-${g.id}"></div>
+      </div>`).join("");
+  }
 
   window.Pages = {
     login: LoginPage_render,
     signup: SignupPage_render,
     profile: ProfilePage_render,
-    leaderboard: LeaderboardPage_render
+    leaderboard: LeaderboardPage_render,
+    isOnline
   };
 })();

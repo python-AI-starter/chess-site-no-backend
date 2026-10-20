@@ -96,8 +96,21 @@
     root.appendChild(m);
   };
 
-  // Модальная форма: fields = [{ id, label, type: 'text'|'textarea', value,
-  //   placeholder, maxlength, rows }] -> Promise<{id: value, ...} | null>
+  // Текст -> безопасный HTML с кликабельными ссылками (в т.ч. #/... маршруты)
+  U.linkify = function (text) {
+    const s = U.esc(text);
+    // сначала внутренние маршруты вида #/game/<uuid>
+    let out = s.replace(/(^|\s)(#\/[a-z]+\/[0-9a-f-]{10,})/gi,
+      (m, sp, url) => `${sp}<a href="${url}">${url}</a>`);
+    // затем внешние http(s)
+    out = out.replace(/(https?:\/\/[^^\s<>&"']+)/g,
+      (m, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
+    return out;
+  };
+
+  // Модальная форма: fields = [{ id, label, type: 'text'|'textarea'|'select',
+  //   options: [{v,l}], value, placeholder, maxlength, rows }]
+  //   -> Promise<{id: value, ...} | null>
   U.formModal = function (title, fields, okLabel) {
     return new Promise((resolve) => {
       const root = U.qs("#modal-root");
@@ -109,6 +122,13 @@
         if (f.type === "textarea") {
           return `<label for="fm-${U.esc(f.id)}">${U.esc(f.label)}</label>
             <textarea ${common} rows="${f.rows || 4}">${U.esc(f.value || "")}</textarea>`;
+        }
+        if (f.type === "select") {
+          const opts = (f.options || [])
+            .map(o => `<option value="${U.esc(o.v)}" ${String(f.value) === String(o.v) ? "selected" : ""}>${U.esc(o.l)}</option>`)
+            .join("");
+          return `<label for="fm-${U.esc(f.id)}">${U.esc(f.label)}</label>
+            <select ${common}>${opts}</select>`;
         }
         return `<label for="fm-${U.esc(f.id)}">${U.esc(f.label)}</label>
           <input ${common} type="${f.type || "text"}" value="${U.esc(f.value || "")}" autocomplete="off">`;

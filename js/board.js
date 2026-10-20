@@ -2,6 +2,8 @@
 //  Шахматная доска: отрисовка + click-click и drag&drop.
 //  Поле a1=0 ... h8=63 (как в движке на PL/pgSQL).
 //  Фигуры — векторный набор cburnett (js/pieces.js, инлайн SVG).
+//  Премув: пока ход соперника, можно «зарядить» свой ход — он
+//  отправится автоматически, как только придёт ход соперника.
 // ============================================================
 (function () {
   "use strict";
@@ -29,7 +31,9 @@
     /**
      * opts: {
      *   onMove(fromName, toName, promoChar|null),
-     *   canMove(): boolean               — можно ли взаимодействовать
+     *   onPremove(fromName, toName, promoChar|null),  — ход «в уме», до хода соперника
+     *   canMove(): boolean               — можно ли ходить сейчас (мой ход)
+     *   canPremove(): boolean            — можно ли ставить премув (партия активна, я участник)
      *   myColor(): 'white'|'black'|null  — цвет взаимодействующей стороны
      * }
      */
@@ -43,7 +47,9 @@
       this.lastMove = null;          // [fromSq, toSq]
       this.checkSq = null;
       this.interactive = false;
+      this.premove = null;           // { from, to, promo } — sq-индексы
       this._promo = null;
+      this._premoving = false;       // выбор премува (вместо легальных целей)
       this._build();
       this._bindPointer();
     }
@@ -93,8 +99,20 @@
     }
     flip() { this.setOrientation(this.orientation === "white" ? "black" : "white"); }
 
-    setMoves(list) { this.legalMoves = list || []; this._clearSelection(); this.render(); }
+    setMoves(list) {
+      this.legalMoves = list || [];
+      this._clearSelection();
+      // премув не трогаем — он живёт до нового состояния партии
+      this.render();
+    }
     setInteractive(v) { this.interactive = !!v; if (!v) this._clearSelection(); this.render(); }
+
+    setPremove(p) {
+      // p: {from:'e2', to:'e4', promo:'q'|null} | null
+      this.premove = p ? { from: sqFromName(p.from), to: sqFromName(p.to), promo: p.promo || null } : null;
+      this._clearSelection();
+      this.render();
+    }
 
     setPosition(fen, marks) {
       this.squares = fenToSquares(fen);
@@ -104,7 +122,12 @@
       this.render();
     }
 
-    _clearSelection() { this.selected = null; this._hidePromo(); }
+    _clearSelection() {
+      this.selected = null;
+      this._targets = null;
+      this._premoving = false;
+      this._hidePromo();
+    }
 
     _targetsFor(fromSq) {
       // { toSq: [uci...] }
@@ -136,6 +159,8 @@
         d.classList.toggle("last-from", !!this.lastMove && this.lastMove[0] === sq);
         d.classList.toggle("last-to", !!this.lastMove && this.lastMove[1] === sq);
         d.classList.toggle("check", this.checkSq === sq);
+        d.classList.toggle("premove-from", !!this.premove && this.premove.from === sq);
+        d.classList.toggle("premove-to", !!this.premove && this.premove.to === sq);
         const p = this.squares[sq];
         if (p) {
           const s = document.createElement("span");
@@ -156,42 +181,84 @@
     // ---------- выбор и взаимодействие ----------
     _onDown(sq, ev) {
       if (this._promo) return;
-      if (!this.interactive || !this.opts.canMove || !this.opts.canMove()) return;
       const myColor = this.opts.myColor ? this.opts.myColor() : null;
-      const targets = this.selected != null ? this._targets : {};
+      const canMove = this.interactive && this.opts.canMove && this.opts.canMove();
 
-      if (this.selected != null && targets[sq]) {
-        this._attemptMove(this.selected, sq);
-        return;
-      }
-      const color = this._pieceColorAt(sq);
-      if (color && color === myColor && (this.legalMoves || []).length) {
-        const t = this._targetsFor(sq);
-        if (Object.keys(t).length) {
-          this.selected = sq;
-          this._targets = t;
-          this.render();
-          this._startDrag(sq, ev);
+      if (canMove) {
+        const targets = this.selected != null ? this._targets : {};
+        if (this.selected != null && targets[sq]) {
+          this._attemptMove(this.selected, sq, false);
           return;
         }
+        const color = this._pieceColorAt(sq);
+        if (color && color === myColor && (this.legalMoves || []).length) {
+          const t = this._targetsFor(sq);
+          if (Object.keys(t).length) {
+            this.selected = sq;
+            this._targets = t;
+            this.render();
+            this._startDrag(sq, ev, false);
+            return;
+          }
+        }
+        this._clearSelection();
+        this.render();
+        return;
+      }
+
+      // ---------- ПРЕМУВ: ход ещё не мой, но партия идёт ----------
+      if (!this.opts.canPremove || !this.opts.canPremove()) return;
+
+      // клик по своему премуву = отмена
+      if (this.premove && (sq === this.premove.from || sq === this.premove.to)) {
+        this.premove = null;
+        this._clearSelection();
+        if (this.opts.onPremoveCancel) this.opts.onPremoveCancel();
+        this.render();
+        return;
+      }
+      // клик по фигуре моего цвета — выбор для премува (цели любые)
+      const color = this._pieceColorAt(sq);
+      if (color && color === myColor) {
+        this.selected = sq;
+        this._targets = null;
+        this._premoving = true;
+        this.render();
+        this._startDrag(sq, ev, true);
+        return;
+      }
+      // клик по другой клетке при выбранной фигуре — премув на неё
+      if (this._premoving && this.selected != null && sq !== this.selected) {
+        this._attemptMove(this.selected, sq, true);
+        return;
       }
       this._clearSelection();
       this.render();
     }
 
-    _attemptMove(fromSq, toSq) {
-      const variants = this._targets[toSq] || [];
-      if (!variants.length) return;
-      if (variants[0].length === 5) {
-        this._showPromo(toSq, variants);
-      } else {
-        this._clearSelection();
-        this.render();
-        this.opts.onMove(sqName(fromSq), sqName(toSq), null);
+    _attemptMove(fromSq, toSq, isPremove) {
+      let variants = null;
+      if (!isPremove) {
+        variants = (this._targets && this._targets[toSq]) || [];
+        if (!variants.length) return;
       }
+      // превращение? пешка моего цвета идёт на последнюю горизонталь
+      const p = this.squares[fromSq];
+      const isPawn = p === "P" || p === "p";
+      const lastRank = isPawn ? toSq >> 3 : -1;
+      const promoRank = (p === "P") ? 7 : (p === "p") ? 0 : -1;
+      if (isPawn && lastRank === promoRank) {
+        this._showPromo(fromSq, toSq, isPremove);
+        return;
+      }
+      this._clearSelection();
+      this.render();
+      const from = sqName(fromSq), to = sqName(toSq);
+      if (isPremove) this.opts.onPremove(from, to, null);
+      else this.opts.onMove(from, to, null);
     }
 
-    _showPromo(toSq, variants) {
+    _showPromo(fromSq, toSq, isPremove) {
       this._hidePromo();
       const root = this.root;
       const wrap = document.createElement("div");
@@ -206,11 +273,11 @@
         b.addEventListener("pointerdown", (e) => e.stopPropagation());
         b.addEventListener("click", (e) => {
           e.stopPropagation();
-          const fromSq = this.selected;
           this._hidePromo();
           this._clearSelection();
           this.render();
-          this.opts.onMove(sqName(fromSq), sqName(toSq), l);
+          if (isPremove) this.opts.onPremove(sqName(fromSq), sqName(toSq), l);
+          else this.opts.onMove(sqName(fromSq), sqName(toSq), l);
         });
         wrap.appendChild(b);
       }
@@ -229,7 +296,7 @@
       if (this._promo) { this._promo.remove(); this._promo = null; }
     }
 
-    _startDrag(fromSq, ev) {
+    _startDrag(fromSq, ev, isPremove) {
       const pieceEl = this.cells[fromSq].querySelector(".piece");
       if (!pieceEl) return;
       const ghost = pieceEl.cloneNode(true);
@@ -255,8 +322,10 @@
         const cell = el && el.closest ? el.closest(".sq") : null;
         if (cell) {
           const sq = Number(cell.dataset.sq);
-          if (sq !== fromSq && this._targets[sq]) {
-            this._attemptMove(fromSq, sq);
+          if (!isPremove && sq !== fromSq && this._targets && this._targets[sq]) {
+            this._attemptMove(fromSq, sq, false);
+          } else if (isPremove && sq !== fromSq) {
+            this._attemptMove(fromSq, sq, true);
           } else if (sq === fromSq) {
             // остаёмся выбранными (click-click)
           } else {

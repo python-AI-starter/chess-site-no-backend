@@ -1,13 +1,38 @@
 // ============================================================
 //  Роутер + каркас (навбар, сессия, баннер бана)
+//  Страница рендерится МГНОВЕННО (до сетевых вызовов), сессия
+//  и время сервера подтягиваются в фоне. Подсветка активного
+//  пункта меню — чистый клиент, синхронно на каждый переход.
 // ============================================================
 (function () {
   "use strict";
+
+  // ---------- тема (светлая/тёмная) ----------
+  // Применение — мгновенно (инлайн-скрипт в <head> до отрисовки),
+  // тут только переключатель и сохранение выбора.
+  function applyTheme(t) {
+    document.documentElement.classList.toggle("dark", t === "dark");
+    const b = U.qs("#theme-toggle");
+    if (b) b.textContent = t === "dark" ? "☀" : "☾";
+  }
+  function toggleTheme() {
+    const t = document.documentElement.classList.contains("dark") ? "light" : "dark";
+    try { localStorage.setItem("ladya-theme", t); } catch (e) {}
+    applyTheme(t);
+  }
 
   const App = {
     cleanup: null,
     user: null,
     profile: null,
+    _routedOnce: false,
+
+    // мгновенная подсветка активного пункта меню (без сети)
+    updateNav() {
+      const page = (location.hash || "#/").replace(/^#\//, "").split("/")[0] || "lobby";
+      U.qsa("#nav-links a").forEach(a =>
+        a.classList.toggle("active", a.dataset.nav === page));
+    },
 
     async refreshNav() {
       this.user = await API.user();
@@ -35,24 +60,37 @@
         box.innerHTML = `<a href="#/login">Войти</a> <a class="btn primary" style="padding:6px 14px" href="#/signup">Регистрация</a>`;
         ban.classList.add("hidden");
       }
-      // подсветка активного пункта
-      const page = (location.hash || "#/").split("/")[1] || "lobby";
-      U.qsa("#nav-links a").forEach(a =>
-        a.classList.toggle("active", a.dataset.nav === page));
+    },
+
+    // непрочитанные личные сообщения -> бейдж в меню
+    async refreshDmBadge() {
+      const b = U.qs("#dm-badge");
+      if (!b) return;
+      if (!this.user) { b.classList.add("hidden"); return; }
+      const { count, error } = await API.sb.from("dm_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("recipient_id", this.user.id).is("read_at", null);
+      if (error) return;
+      if (count > 0) {
+        b.textContent = count > 99 ? "99+" : String(count);
+        b.classList.remove("hidden");
+      } else b.classList.add("hidden");
     },
 
     async route() {
+      // ссылка из письма несёт сессию в хэше (#access_token=...) — это не
+      // маршрут: показываем лобби, пока supabase-js не подхватит сессию
+      if (/^#(access_token|error|error_description)=/.test(location.hash)) {
+        location.hash = "#/";
+        return;
+      }
+      this.updateNav(); // подсветка — сразу и синхронно
       const app = U.qs("#app");
       if (this.cleanup) { try { this.cleanup(); } catch (e) {} this.cleanup = null; }
       const hash = location.hash || "#/";
       const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
       const page = parts[0] || "";
       const arg = parts[1] || null;
-
-      if (this.profile && this.profile.is_banned && page !== "profile" && page !== "") {
-        // забаненный может смотреть лобби и профиль, но не играть/писать —
-        // сервер всё равно не пустит; здесь просто предупреждение в шапке
-      }
 
       const wrap = async (fn, ...args) => { this.cleanup = await fn(app, ...args); };
 
@@ -70,11 +108,14 @@
         else if (page === "blog" && !arg) await wrap(Community.blog);
         else if (page === "blog" && arg === "new") await wrap(Community.blogNew);
         else if (page === "blog") await wrap(Community.blogPost, arg);
+        else if (page === "dm" && !arg) await wrap(Social.messages);
+        else if (page === "dm") await wrap(Social.thread, arg);
         else app.innerHTML = `<div class="card center"><h2>404</h2><p><a href="#/">На главную</a></p></div>`;
       } catch (e) {
         console.error(e);
         app.innerHTML = `<div class="card center"><h2>Ошибка</h2><p class="muted">${U.esc(e.message || e)}</p></div>`;
       }
+      this.refreshDmBadge();
       window.scrollTo(0, 0);
     }
   };
@@ -82,10 +123,47 @@
   window.addEventListener("hashchange", () => App.route());
   window.App = App;
 
+  // ---------- онлайн-пульс: heartbeat раз в 30 с ----------
+  let hbTimer = null;
+  function startHeartbeat() {
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
+    if (!App.user) return;
+    const beat = () => API.rpc("heartbeat").catch(() => {});
+    beat();
+    hbTimer = setInterval(beat, 30000);
+  }
+
   (async function init() {
-    await App.refreshNav();
-    await ServerTime.sync();
+    // тема — до первого рендера (инлайн в index.html), здесь только кнопка
+    applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
+    const tbtn = U.qs("#theme-toggle");
+    if (tbtn) tbtn.addEventListener("click", toggleTheme);
+
+    // переход по ссылке подтверждения почты — автовход без логина
+    const viaEmailLink = /access_token=/.test(location.hash);
+
+    // 1) мгновенный рендер страницы — без ожидания сети
     App.route();
-    API.onAuth(() => App.refreshNav());
+    // 2) сессия и серверное время — в фоне
+    ServerTime.sync().catch(() => {});
+    await App.refreshNav();
+    startHeartbeat();
+    // если на мгновенный рендер гость смотрел «гостевую» страницу,
+    // а сессия нашлась — перерисовать один раз уже с известным входом
+    if (App.user && (location.hash === "" || location.hash === "#/")) App.route();
+    if (viaEmailLink && App.user) {
+      U.toast("Email подтверждён — вы вошли автоматически", "good");
+      try { history.replaceState(null, "", location.pathname + location.search + "#/"); } catch (e) {}
+    }
+    // 3) бейдж непрочитанных ЛС — обновлять по кругу
+    App.refreshDmBadge();
+    setInterval(() => App.refreshDmBadge(), 15000);
+    API.onAuth((evt) => {
+      App.refreshNav().then(() => {
+        startHeartbeat();
+        App.refreshDmBadge();
+        if (evt === "SIGNED_IN" || evt === "SIGNED_OUT") App.route();
+      });
+    });
   })();
 })();
