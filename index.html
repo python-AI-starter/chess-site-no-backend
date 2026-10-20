@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Ладья — свободные шахматы</title>
+<meta name="description" content="Простые онлайн-шахматы: быстрые партии, форум, клубы, блог. Валидация ходов в PostgreSQL.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9820;</text></svg>">
+<link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body>
+<header class="topnav">
+  <a class="brand" href="#/">&#9820; Ладья</a>
+  <nav class="navlinks" id="nav-links">
+    <a href="#/" data-nav="lobby">Играть</a>
+    <a href="#/leaderboard" data-nav="leaderboard">Рейтинг</a>
+    <a href="#/forum" data-nav="forum">Форум</a>
+    <a href="#/clubs" data-nav="clubs">Клубы</a>
+    <a href="#/blog" data-nav="blog">Блог</a>
+  </nav>
+  <div class="navright" id="nav-user"></div>
+</header>
+
+<div id="ban-banner" class="ban-banner hidden"></div>
+<main id="app" class="app"></main>
+
+<div id="toasts" class="toasts"></div>
+<div id="modal-root"></div>
+
+<script src="vendor/supabase.js?v=1"></script>
+<script src="js/config.js?v=1"></script>
+<script src="js/util.js?v=2"></script>
+<script src="js/time.js?v=1"></script>
+<script src="js/api.js?v=2"></script>
+<script src="js/pieces.js?v=1"></script>
+<script src="js/board.js?v=2"></script>
+<script src="js/lobby.js?v=2"></script>
+<script src="js/game.js?v=3"></script>
+<script src="js/pages.js?v=2"></script>
+<script src="js/community.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+</body>
+</html>
