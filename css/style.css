@@ -96,8 +96,15 @@ h1 { font-size: 26px; } h2 { font-size: 20px; } h3 { font-size: 17px; }
 }
 .navlinks a:hover { background: #3a3733; color: #fff; text-decoration: none; }
 .navlinks a.active { background: #4a4741; color: #fff; }
-.navright { display: flex; align-items: center; gap: 10px; }
+.navright { display: flex; align-items: center; gap: 14px; }
 .navright a { color: #cfcdc8; }
+/* «Войти» и «Регистрация» в навбаре — с комфортным зазором */
+#nav-user { display: flex; align-items: center; gap: 16px; }
+#nav-user .nav-login {
+  padding: 6px 10px; border-radius: 6px; font-weight: 600;
+}
+#nav-user .nav-login:hover { background: #3a3733; color: #fff; text-decoration: none; }
+#nav-user .nav-signup { padding: 7px 16px; }
 .rchip {
   display: inline-flex; align-items: center; gap: 8px;
   background: #3a3733; padding: 5px 12px; border-radius: 20px; color: #fff;
@@ -276,6 +283,10 @@ html.dark .premove-box { background: #3d2a24; border-color: #6a4436; }
 .chat-log { flex: 1; overflow-y: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font-size: 14px; }
 .chat-msg { margin: 4px 0; word-break: break-word; }
 .chat-msg b { color: var(--accent-dark); }
+/* кликабельные ники (профиль) во всех чатах/списках */
+.chat-msg .user-link { font-weight: 700; color: var(--accent-dark); }
+.chat-msg.mine .user-link { color: var(--good); }
+.chat-msg .user-link:hover { text-decoration: underline; }
 .chat-msg.sys { color: var(--muted); font-style: italic; }
 .chat-input { display: flex; gap: 8px; margin-top: 8px; }
 

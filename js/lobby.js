@@ -110,13 +110,18 @@
             <td><a class="btn small" href="#/login">Войти</a></td>
           </tr>`;
         });
-        box.innerHTML = rows.length
+        const html = rows.length
           ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
           : `<div class="empty">Пока нет открытых вызовов</div>`;
+        const sig = (data || []).map(g => g.id + g.status).join(",");
+        if (box.dataset.sig === sig) return; // ничего не изменилось — не мерцаем
+        box.dataset.sig = sig;
+        box.innerHTML = html;
       }
       loadOpenGuest();
-      const t = setInterval(loadOpenGuest, 5000);
-      cleanupFns.push(() => clearInterval(t));
+      const t = API.poll(5000, loadOpenGuest);
+      const stopVis = API.onVisible(loadOpenGuest);
+      cleanupFns.push(() => { t(); stopVis(); });
       return function cleanup() { cleanupFns.forEach(f => f()); };
     }
 
@@ -131,6 +136,9 @@
         .order("created_at", { ascending: false })
         .limit(8);
       if (!data || !data.length) { box.classList.add("hidden"); return; }
+      const sig = data.map(g => g.id + g.status).join(",");
+      if (box.dataset.sig === sig) return; // без изменений — не мерцаем
+      box.dataset.sig = sig;
       box.classList.remove("hidden");
       box.innerHTML = `<h2>Мои партии</h2>` + data.map(g =>
         `<div class="list-item">
@@ -220,6 +228,9 @@
             : `<button class="btn primary small" data-join="${g.id}">Принять</button>`}</td>
         </tr>`;
         });
+      const sig = (data || []).filter(g => !g.invitee || g.invitee === me.id).map(g => g.id).join(",");
+      if (box.dataset.sig === sig) return; // без изменений — не мерцаем и не перецепляем
+      box.dataset.sig = sig;
       box.innerHTML = rows.length
         ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
         : `<div class="empty">Пока нет открытых вызовов — создайте свой!</div>`;
@@ -230,19 +241,24 @@
       }));
     }
     loadOpen();
-    const openTimer = setInterval(loadOpen, 5000);
-
-    // realtime: новый вызов появляется мгновенно (поллинг — страховка)
-    let rtDebounce = null;
-    const rtChan = API.subscribeInserts("games", null, () => {
-      clearTimeout(rtDebounce);
-      rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 300);
-    });
+    // открытые вызовы живут на realtime (INSERT+UPDATE: создание и присоединение);
+    // поллинг тикает ТОЛЬКО пока websocket не поднялся; в скрытой вкладке спит
+    let rtDebounce = null, _wasDown = false, rtChan = null;
+    const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 300); };
+    rtChan = API.subscribeInserts("games", null, rtRefresh, (status) => {
+      if (status === "SUBSCRIBED" && _wasDown) { loadOpen(); loadMyGames(); } // доза-fetch после reconnect
+      _wasDown = status !== "SUBSCRIBED";
+    }, ["INSERT", "UPDATE"]);
+    const openTimer = API.poll(5000, loadOpen, () => API.chUp(rtChan));
+    const myTimer = API.poll(8000, loadMyGames, () => API.chUp(rtChan));
+    const stopVisible = API.onVisible(() => { loadOpen(); loadMyGames(); });
 
     return function cleanup() {
       disposed = true;
       if (seekTimer) clearInterval(seekTimer);
-      clearInterval(openTimer);
+      openTimer();
+      myTimer();
+      stopVisible();
       clearTimeout(rtDebounce);
       API.unsubscribe(rtChan);
       if (seeking) API.cancelSeek();

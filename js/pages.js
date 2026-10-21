@@ -125,6 +125,13 @@
     const { data: p } = await API.sb.from("profiles").select("*").eq("id", userId).maybeSingle();
     if (!p) { container.innerHTML = `<div class="card center">Профиль не найден</div>`; return () => {}; }
     const own = me && me.id === p.id;
+    // заблокирован ли этот игрок мною (для UI; сервер всё равно проверит)
+    let iBlocked = false;
+    if (me && !own) {
+      const { data: blk } = await API.sb.from("blocked_users")
+        .select("blocked_id").eq("blocked_id", p.id).maybeSingle();
+      iBlocked = !!blk;
+    }
 
     const { data: recent } = await API.sb.from("games")
       .select("id,white,black,result,winner,reason,status,initial_ms,increment_ms,rated,finished_at,created_at,wp:profiles!games_white_fkey(username),bp:profiles!games_black_fkey(username)")
@@ -145,8 +152,9 @@
             </div>
           </div>
           <div class="row">
-            ${!own && me ? `<button class="btn" id="p-dm">✉ Написать</button>
+            ${!own && me && !iBlocked ? `<button class="btn" id="p-dm">✉ Написать</button>
                             <button class="btn primary" id="p-challenge">⚔ Вызвать</button>` : ""}
+            ${!own && me ? `<button class="btn ghost" id="p-block" title="Заблокированный не сможет писать и вызывать">${iBlocked ? "✓ Разблокировать" : "🚫 Заблокировать"}</button>` : ""}
             ${own ? `<button class="btn" id="p-rename">Сменить ник</button>` : ""}
           </div>
         </div>
@@ -162,11 +170,25 @@
       <div class="card">
         <h2>Последние партии</h2>
         <div id="recent"></div>
-      </div>`;
+      </div>
+      ${own ? `<div class="card"><h3>Заблокированные игроки</h3>
+        <p class="muted small">Они не могут вам писать и вызывать. Список виден только вам.</p>
+        <div id="blocked-list"><span class="spinner"></span></div></div>` : ""}`;
 
     if (!own && me) {
-      U.qs("#p-dm").addEventListener("click", () => { location.hash = `#/dm/${p.id}`; });
-      U.qs("#p-challenge").addEventListener("click", () => challengeModal(p));
+      const dmBtn = U.qs("#p-dm");
+      if (dmBtn) dmBtn.addEventListener("click", () => { location.hash = `#/dm/${p.id}`; });
+      const chBtn = U.qs("#p-challenge");
+      if (chBtn) chBtn.addEventListener("click", () => challengeModal(p));
+      U.qs("#p-block").addEventListener("click", async () => {
+        const btn = U.qs("#p-block");
+        btn.disabled = true;
+        const { error } = iBlocked ? await API.unblockUser(p.id) : await API.blockUser(p.id);
+        if (error) { btn.disabled = false; return U.toast(error.message, "error"); }
+        API.invalidateBlocked();
+        U.toast(iBlocked ? "Игрок разблокирован" : "Игрок заблокирован — сообщения и вызовы от него больше не придут", "good");
+        App.route();
+      });
     }
     if (own) {
       U.qs("#p-rename").addEventListener("click", async () => {
@@ -203,6 +225,29 @@
           <a href="#/game/${g.id}">открыть</a>
         </div>`;
       }).join("");
+    }
+    // карточка заблокированных (только свой профиль)
+    if (own) {
+      const bl = U.qs("#blocked-list");
+      const { data: blockedRows } = await API.sb.from("blocked_users")
+        .select("blocked_id, created_at, bp:profiles!blocked_users_blocked_id_fkey(id,username,rating)")
+        .order("created_at", { ascending: false });
+      bl.innerHTML = (blockedRows || []).length ? (blockedRows || []).map(b => `
+        <div class="list-item">
+          <span class="avatar">${U.esc((b.bp && b.bp.username || "?")[0].toUpperCase())}</span>
+          <div style="flex:1">
+            <a href="#/profile/${b.blocked_id}"><b>${U.esc(b.bp ? b.bp.username : "?")}</b></a>
+            <div class="muted small">с ${U.fmtDate(b.created_at)}</div>
+          </div>
+          <button class="btn ghost small" data-unblock="${b.blocked_id}">Разблокировать</button>
+        </div>`).join("") : `<div class="empty">Список пуст</div>`;
+      U.qsa("[data-unblock]", bl).forEach(btn => btn.addEventListener("click", async () => {
+        const { error } = await API.unblockUser(btn.dataset.unblock);
+        if (error) return U.toast(error.message, "error");
+        API.invalidateBlocked();
+        U.toast("Разблокирован", "good");
+        App.route();
+      }));
     }
     return () => {};
   };

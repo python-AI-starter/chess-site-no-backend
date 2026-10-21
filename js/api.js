@@ -79,6 +79,19 @@
   API.sendChat = (id, body) => API.rpc("send_chat", { p_game_id: id, p_body: body });
   API.sendClubChat = (id, body) => API.rpc("send_club_chat", { p_club_id: id, p_body: body });
   API.setUsername = (u) => API.rpc("set_username", { p_username: u });
+  // --- блокировки игроков ---
+  API.blockUser = (id) => API.rpc("block_user", { p_target: id });
+  API.unblockUser = (id) => API.rpc("unblock_user", { p_target: id });
+  // свой список заблокированных (RLS: только свой) — для фильтрации чата и UI
+  API.blockedIds = async function () {
+    if (!API._blockedCache) API._blockedCache = _fetchBlocked();
+    return API._blockedCache;
+  };
+  API.invalidateBlocked = () => { API._blockedCache = null; };
+  async function _fetchBlocked() {
+    const { data, error } = await sb.from("blocked_users").select("blocked_id");
+    return error ? new Set() : new Set((data || []).map(r => r.blocked_id));
+  }
   // --- соцсеть: общий чат, ЛС, онлайн-пульс, реплей, адресный вызов ---
   API.sendGlobalChat = (body) => API.rpc("send_global_chat", { p_body: body });
   API.sendDm = (rcpt, body) => API.rpc("send_dm", { p_recipient: rcpt, p_body: body });
@@ -87,49 +100,78 @@
   API.getReplay = (id) => API.rpc("get_replay", { p_game_id: id });
 
   // --- Realtime ---
-  API.subscribeGame = function (gameId, onUpdate) {
+  // Каждая подписка помнит свой статус: "SUBSCRIBED" = websocket жив,
+  // тогда fallback-поллинг страницы полностью отключается (см. API.poll).
+  // onStatus(status) зовётся при каждом смене статуса канала — так
+  // страница делает тихий дез fetch после переподключения (догнать упущенное).
+  function track(ch, onStatus) {
+    return (status) => {
+      ch._rt = status;
+      if (onStatus) { try { onStatus(status); } catch (e) {} }
+    };
+  }
+  API.chUp = (ch) => !!(ch && ch._rt === "SUBSCRIBED");
+
+  API.subscribeGame = function (gameId, onUpdate, onStatus) {
     const ch = sb.channel(`game:${gameId}:${Math.random().toString(36).slice(2, 8)}`)
       .on("postgres_changes",
         { event: "UPDATE", schema: "public", table: "games", filter: `id=eq.${gameId}` },
-        (payload) => onUpdate(payload.new))
-      .subscribe();
+        (payload) => onUpdate(payload.new));
+    ch.subscribe(track(ch, onStatus));
     return ch;
   };
-  API.subscribeChat = function (gameId, onInsert) {
+  API.subscribeChat = function (gameId, onInsert, onStatus) {
     const ch = sb.channel(`chat:${gameId}:${Math.random().toString(36).slice(2, 8)}`)
       .on("postgres_changes",
         { event: "INSERT", schema: "public", table: "game_chat", filter: `game_id=eq.${gameId}` },
-        (payload) => onInsert(payload.new))
-      .subscribe();
+        (payload) => onInsert(payload.new));
+    ch.subscribe(track(ch, onStatus));
     return ch;
   };
-  API.subscribeClubChat = function (clubId, onInsert) {
+  API.subscribeClubChat = function (clubId, onInsert, onStatus) {
     const ch = sb.channel(`club:${clubId}:${Math.random().toString(36).slice(2, 8)}`)
       .on("postgres_changes",
         { event: "INSERT", schema: "public", table: "club_chat", filter: `club_id=eq.${clubId}` },
-        (payload) => onInsert(payload.new))
-      .subscribe();
+        (payload) => onInsert(payload.new));
+    ch.subscribe(track(ch, onStatus));
     return ch;
   };
   API.unsubscribe = (ch) => { if (ch) sb.removeChannel(ch); };
 
-  // универсальная подписка на INSERT в таблицу (RLS сам режет чужие строки)
-  API.subscribeInserts = function (table, filter, onInsert) {
-    const ch = sb.channel(`tbl:${table}:${Math.random().toString(36).slice(2, 8)}`)
-      .on("postgres_changes",
-        { event: "INSERT", schema: "public", table, ...(filter ? { filter } : {}) },
-        (payload) => onInsert(payload.new))
-      .subscribe();
+  // универсальная подписка на события таблицы (RLS сам режет чужие строки)
+  // events: "INSERT" (по умолчанию) или массив ["INSERT","UPDATE"]
+  API.subscribeInserts = function (table, filter, onInsert, onStatus, events) {
+    const evs = events || ["INSERT"];
+    const ch = sb.channel(`tbl:${table}:${Math.random().toString(36).slice(2, 8)}`);
+    for (const ev of evs) {
+      ch.on("postgres_changes",
+        { event: ev, schema: "public", table, ...(filter ? { filter } : {}) },
+        (payload) => onInsert(payload.new, ev));
+    }
+    ch.subscribe(track(ch, onStatus));
     return ch;
   };
-
-  // ---------- FALLBACK-ПОЛЛИНГ ----------
-  // Realtime может быть недоступен (сеть, прокси, старый браузер) —
-  // поэтому всё критичное дублируется опросом. Возвращает stop().
-  // fn вызывается сразу? нет: страница сама делает первый fetch.
-  API.poll = function (ms, fn) {
-    const t = setInterval(() => { Promise.resolve().then(fn).catch(() => {}); }, ms);
+  // ---------- FALLBACK-ПОЛЛИНГ (умный) ----------
+  // Пока websocket жив (канал SUBSCRIBED), поллинг НЕ тикает вовсе.
+  // Если realtime недоступен (сеть/прокси/старый браузер) — страница
+  // опрашивается с заданным интервалом. В скрытой вкладке всё спит.
+  // gate() — «условие пропуска тика»: верните true, когда поллинг не
+  // нужен (обычно () => API.chUp(chan) — websocket жив).
+  API.poll = function (ms, fn, gate) {
+    const t = setInterval(() => {
+      if (document.hidden) return;              // фоновая вкладка — не дёргаем сеть/ЦП
+      if (gate && gate()) return;               // realtime жив — поллинг не нужен
+      Promise.resolve().then(fn).catch(() => {});
+    }, ms);
     return () => clearInterval(t);
+  };
+
+  // Тихий дез-обновлятор при возврате во вкладку: БЕЗ перерисовки всего
+  // интерфейса — только доза свежих данных (дедуп на странице отсечёт лишнее).
+  API.onVisible = function (fn) {
+    const h = () => { if (!document.hidden) Promise.resolve().then(fn).catch(() => {}); };
+    document.addEventListener("visibilitychange", h);
+    return () => document.removeEventListener("visibilitychange", h);
   };
 
   // защита от «двойного» применения состояния (realtime + poll гонят одно и то же)

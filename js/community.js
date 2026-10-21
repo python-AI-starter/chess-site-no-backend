@@ -47,7 +47,7 @@
       <div class="list-item">
         <div style="flex:1">
           <a href="#/forum/${t.id}" style="font-weight:700;font-size:16px">${U.esc(t.title)}</a>
-          <div class="muted small">${U.esc(t.a ? t.a.username : "?")} · ${U.fmtDate(t.created_at)}</div>
+          <div class="muted small"><a href="#/profile/${t.a ? t.a.id : ""}">${U.esc(t.a ? t.a.username : "?")}</a> · ${U.fmtDate(t.created_at)}</div>
         </div>
         <span class="badge">${cnt[t.id] || 0} ответов</span>
       </div>`).join("") : `<div class="empty">Тем пока нет. Будьте первым!</div>`;
@@ -143,7 +143,7 @@
         <span class="avatar">${U.esc(c.name[0].toUpperCase())}</span>
         <div style="flex:1">
           <a href="#/clubs/${c.id}" style="font-weight:700;font-size:16px">${U.esc(c.name)}</a>
-          <div class="muted small">Владелец: ${U.esc(c.o ? c.o.username : "?")} · участников: ${c.m && c.m[0] ? c.m[0].count : 1}</div>
+          <div class="muted small">Владелец: <a href="#/profile/${c.o ? c.o.id : ""}">${U.esc(c.o ? c.o.username : "?")}</a> · участников: ${c.m && c.m[0] ? c.m[0].count : 1}</div>
         </div>
       </div>`).join("") || `<div class="empty">Клубов пока нет</div>`;
     return () => {};
@@ -257,7 +257,10 @@
         if (seen.has(m.id)) return; // realtime + poll могут дублировать
         seen.add(m.id);
         const name = (m.p && m.p.username) || names[m.user_id] || "?";
-        const d = U.el(`<div class="chat-msg"><b>${U.esc(name)}:</b> ${U.esc(m.body)}</div>`);
+        const who = m.user_id
+          ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(name)}:</a>`
+          : `<b>${U.esc(name)}:</b>`;
+        const d = U.el(`<div class="chat-msg">${who} ${U.linkify(m.body)}</div>`);
         log.appendChild(d);
         log.scrollTop = log.scrollHeight;
       };
@@ -272,17 +275,10 @@
       };
       U.qs("#club-chat-send").addEventListener("click", send);
       U.qs("#club-chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-      chans.push(API.subscribeClubChat(clubId, async (row) => {
-        if (!names[row.user_id]) {
-          const { data: pr } = await API.sb.from("profiles")
-            .select("username").eq("id", row.user_id).maybeSingle();
-          if (pr) names[row.user_id] = pr.username;
-        }
-        addMsg(row);
-        U.soundMove();
-      }));
-      // fallback-поллинг (если websocket недоступен)
-      stops.push(API.poll(4000, async () => {
+
+      // доза-fetch новых сообщений: общий для поллинга-фоллбэка,
+      // переподключения websocket и возврата во вкладку
+      async function fetchFresh() {
         const { data: fresh } = await API.sb.from("club_chat")
           .select("*, p:profiles(username)").eq("club_id", clubId)
           .order("created_at", { ascending: false }).limit(30);
@@ -292,7 +288,25 @@
           if (m.p) names[m.user_id] = m.p.username;
           addMsg(m);
         }
-      }));
+      }
+
+      let chatChan = null, _wasDown = false;
+      chatChan = API.subscribeClubChat(clubId, async (row) => {
+        if (!names[row.user_id]) {
+          const { data: pr } = await API.sb.from("profiles")
+            .select("username").eq("id", row.user_id).maybeSingle();
+          if (pr) names[row.user_id] = pr.username;
+        }
+        addMsg(row);
+        U.soundMove();
+      }, (status) => {
+        if (status === "SUBSCRIBED" && _wasDown) fetchFresh();
+        _wasDown = status !== "SUBSCRIBED";
+      });
+      chans.push(chatChan);
+      // fallback-поллинг — только когда websocket не поднялся; в скрытой вкладке спит
+      stops.push(API.poll(4000, fetchFresh, () => API.chUp(chatChan)));
+      stops.push(API.onVisible(fetchFresh));
     }
     return function cleanup() { stops.forEach(s => s()); chans.forEach(API.unsubscribe); };
   };
@@ -311,7 +325,7 @@
       <div class="list-item">
         <div style="flex:1">
           <a href="#/blog/${p.id}" style="font-weight:700;font-size:17px">${U.esc(p.title)}</a>
-          <div class="muted small">${U.esc(p.a ? p.a.username : "?")} · ${U.fmtDate(p.created_at)}</div>
+          <div class="muted small"><a href="#/profile/${p.a ? p.a.id : ""}">${U.esc(p.a ? p.a.username : "?")}</a> · ${U.fmtDate(p.created_at)}</div>
           <div class="muted small" style="margin-top:4px">${U.esc(p.body.slice(0, 140))}${p.body.length > 140 ? "…" : ""}</div>
         </div>
       </div>`).join("") || `<div class="empty">Постов пока нет</div>`;

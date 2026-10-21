@@ -4,6 +4,8 @@
 //  Фигуры — векторный набор cburnett (js/pieces.js, инлайн SVG).
 //  Премув: пока ход соперника, можно «зарядить» свой ход — он
 //  отправится автоматически, как только придёт ход соперника.
+//  Отмена премува: клик по премуву, кнопка «Отменить» или ПКМ
+//  по любому месту доски (как на Lichess).
 // ============================================================
 (function () {
   "use strict";
@@ -345,9 +347,23 @@
       this.root.addEventListener("pointerdown", (ev) => {
         const cell = ev.target.closest ? ev.target.closest(".sq") : null;
         if (!cell) return;
+        if (ev.button === 2) {
+          // ПКМ по доске — как на Lichess: снять премув (если заряжен)
+          ev.preventDefault();
+          if (this.premove) {
+            this.premove = null;
+            this._clearSelection();
+            if (this.opts.onPremoveCancel) this.opts.onPremoveCancel();
+            this.render();
+          }
+          return;
+        }
+        if (ev.button !== 0) return;
         ev.preventDefault();
         this._onDown(Number(cell.dataset.sq), ev);
       });
+      // контекстное меню на доске подавляем: ПКМ занят отменой премува
+      this.root.addEventListener("contextmenu", (ev) => ev.preventDefault());
     }
 
     destroy() {

@@ -40,24 +40,35 @@
       const box = U.qs("#nav-user");
       const ban = U.qs("#ban-banner");
       if (this.profile) {
-        box.innerHTML = `
+        // перерисовывать навбар только при реальных изменениях — без мерцания
+        // при возврате во вкладку (supabase шлёт повторные SIGNED_IN/TOKEN_REFRESHED)
+        const sig = [this.profile.id, this.profile.username, this.profile.rating,
+                     this.profile.is_banned ? 1 : 0].join(":");
+        if (box.dataset.sig !== sig) {
+          box.dataset.sig = sig;
+          box.innerHTML = `
           <a class="rchip" href="#/profile/${this.profile.id}">
             <span class="avatar" style="width:26px;height:26px;font-size:13px">
               ${U.esc((this.profile.username || "?")[0].toUpperCase())}</span>
             ${U.esc(this.profile.username)} <b>${this.profile.rating}</b>
           </a>
           <a href="#" id="logout">Выйти</a>`;
-        U.qs("#logout").addEventListener("click", async (e) => {
-          e.preventDefault();
-          await API.signOut();
-          App.refreshNav().then(() => { location.hash = "#/"; App.route(); });
-        });
+          U.qs("#logout").addEventListener("click", async (e) => {
+            e.preventDefault();
+            await API.signOut();
+            App.refreshNav().then(() => { location.hash = "#/"; App.route(); });
+          });
+        }
         if (this.profile.is_banned) {
           ban.textContent = `Аккаунт заблокирован навсегда: ${this.profile.ban_reason || "нарушение правил"}. Играть и писать нельзя.`;
           ban.classList.remove("hidden");
         } else ban.classList.add("hidden");
       } else {
-        box.innerHTML = `<a href="#/login">Войти</a> <a class="btn primary" style="padding:6px 14px" href="#/signup">Регистрация</a>`;
+        if (box.dataset.sig !== "guest") {
+          box.dataset.sig = "guest";
+          box.innerHTML = `<a class="nav-login" href="#/login">Войти</a>
+            <a class="btn primary nav-signup" href="#/signup">Регистрация</a>`;
+        }
         ban.classList.add("hidden");
       }
     },
@@ -71,10 +82,33 @@
         .select("id", { count: "exact", head: true })
         .eq("recipient_id", this.user.id).is("read_at", null);
       if (error) return;
-      if (count > 0) {
-        b.textContent = count > 99 ? "99+" : String(count);
-        b.classList.remove("hidden");
-      } else b.classList.add("hidden");
+      const txt = count > 0 ? (count > 99 ? "99+" : String(count)) : "";
+      if (b.textContent !== txt) { b.textContent = txt; b.classList.toggle("hidden", !count); }
+    },
+
+    // ---------- ЗАЩИТА ОТ ПЕРЕРИСОВКИ ПРИ ВОЗВРАТЕ ВО ВКЛАДКУ ----------
+    // supabase-js при каждом visibilitychange->visible вызывает
+    // _recoverAndRefresh() и ПОВТОРНО эмитит SIGNED_IN/TOKEN_REFRESHED.
+    // Раньше на SIGNED_IN мы делали App.route() — вся страница
+    // перерисовывалась при каждом переключении вкладок. Теперь полное
+    // обновление происходит ТОЛЬКО при реальной смене пользователя.
+    handleAuthEvent(evt, session) {
+      const uid = session && session.user ? session.user.id : null;
+      const prev = this._authUid;
+      this._authUid = uid;
+      const real =
+        (evt === "SIGNED_OUT" && prev != null) ||
+        ((evt === "SIGNED_IN" || evt === "USER_UPDATED") && uid !== prev && prev !== undefined);
+      if (!real) {
+        startHeartbeat(); // просто убедиться, что пульс жив
+        return;
+      }
+      API.invalidateBlocked();
+      this.refreshNav().then(() => {
+        startHeartbeat();
+        this.refreshDmBadge();
+        this.route(); // реальный вход/выход — страница обязана перерисоваться
+      });
     },
 
     async route() {
@@ -122,7 +156,6 @@
 
   window.addEventListener("hashchange", () => App.route());
   window.App = App;
-
   // ---------- онлайн-пульс: heartbeat раз в 30 с ----------
   let hbTimer = null;
   function startHeartbeat() {
@@ -155,15 +188,11 @@
       U.toast("Email подтверждён — вы вошли автоматически", "good");
       try { history.replaceState(null, "", location.pathname + location.search + "#/"); } catch (e) {}
     }
-    // 3) бейдж непрочитанных ЛС — обновлять по кругу
+    // 3) бейдж непрочитанных ЛС — обновлять по кругу (в фоне — спит)
     App.refreshDmBadge();
-    setInterval(() => App.refreshDmBadge(), 15000);
-    API.onAuth((evt) => {
-      App.refreshNav().then(() => {
-        startHeartbeat();
-        App.refreshDmBadge();
-        if (evt === "SIGNED_IN" || evt === "SIGNED_OUT") App.route();
-      });
-    });
+    API.poll(15000, () => App.refreshDmBadge());
+    // возврат во вкладку — тихо обновить бейдж (без перерисовки страницы)
+    API.onVisible(() => App.refreshDmBadge());
+    API.onAuth((evt, session) => App.handleAuthEvent(evt, session));
   })();
 })();

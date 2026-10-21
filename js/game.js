@@ -32,7 +32,9 @@
       chatInit: false, chatSub: false, gameSub: false,
       replay: null, replayPly: null, keyHandler: null,
       premove: null,           // { from, to, promo } — ход «в уме» (uci-имена клеток)
-      chatSeen: new Set(), lastChatTs: null
+      chatSeen: new Set(), lastChatTs: null,
+      rtUp: false,             // websocket канала партии жив → поллинг не нужен
+      stopVisible: null
     };
 
     container.innerHTML = `<div class="card center"><span class="spinner"></span> Загрузка партии…</div>`;
@@ -399,7 +401,7 @@
       // active
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       const prenote = S.premove
-        ? `<div class="draw-box premove-box"><span>Премув: <b>${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}</b> — сыграет после хода соперника</span>
+        ? `<div class="draw-box premove-box"><span>Премув: <b>${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}</b> — сыграет после хода соперника · отмена — ПКМ по доске</span>
            <button class="btn ghost small" id="pm-cancel">Отменить</button></div>`
         : "";
       c.innerHTML = `<div class="center">
@@ -554,7 +556,11 @@
     function chatMsg(m) {
       if (S.chatSeen.has(m.id)) return; // realtime + poll могут дублировать
       S.chatSeen.add(m.id);
-      const d = U.el(`<div class="chat-msg"><b>${U.esc(m.p && m.p.username || "?")}:</b> ${U.esc(m.body)}</div>`);
+      const nm = (m.p && m.p.username) || (S.names && S.names[m.user_id]) || "?";
+      const who = m.user_id
+        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a>`
+        : `<b>${U.esc(nm)}:</b>`;
+      const d = U.el(`<div class="chat-msg">${who} ${U.esc(m.body)}</div>`);
       const empty = chatLog.querySelector(".empty");
       if (empty) empty.remove();
       chatLog.appendChild(d);
@@ -597,10 +603,12 @@
       if (error) { U.toast(error.message, "error"); inp.value = body; }
     }
 
-    // ---------- realtime + fallback-поллинг ----------
-    // Realtime — мгновенная доставка; поллинг — страховка, если websocket
-    // недоступен (сеть/прокси/старый браузер). Дубли отсекаются stateKey/chatSeen.
-    const pollTimer = API.poll(2500, async () => {
+    // ---------- realtime + умный fallback-поллинг ----------
+    // Realtime — мгновенная доставка. Поллинг тикает ТОЛЬКО когда
+    // websocket не поднялся (сеть/прокси) — иначе он отключён вовсе.
+    // Возврат во вкладку — один тихий доза-fetch: перерисовки всей
+    // страницы нет, DOM трогается только если что-то реально изменилось.
+    async function pollOnce() {
       if (S.destroyed || !S.g) return;
       if (S.pendingMove) return; // свой ход уже летит — не мешаем
       try {
@@ -610,16 +618,19 @@
           applyState(data.game, data.legal_moves || [], true);
         }
       } catch (e) { /* сеть моргнула — попробуем в следующий тик */ }
+    }
+    const pollTimer = API.poll(2500, pollOnce, () => S.rtUp);
+    const chatPollTimer = API.poll(3000, fetchNewChat, () => S.chatUp);
+    S.stopVisible = API.onVisible(() => {
+      pollOnce();          // тихо доза-fetch при возврате во вкладку
+      fetchNewChat();      // дедуп chatSeen: лишнего рендера не будет
     });
-    const chatPollTimer = API.poll(3000, fetchNewChat);
-
     // отладочный режим ?nort=1 — отключить realtime (проверка чистого поллинга)
     const NO_RT = /(?:^|[?&])nort=1/.test(location.search);
 
     function subscribe() {
       if (NO_RT || !S.g || S.gameSub) return;
       S.gameSub = true;
-      API.unsubscribe(S.chans.pop());
       S.chans.push(API.subscribeGame(S.g.id, (row) => {
         if (API.stateKey(row) === API.stateKey(S.g)) return; // дубликат после poll
         // позиция изменилась -> старый список легальных ходов недействителен,
@@ -628,6 +639,10 @@
                         row.status !== S.g.status;
         applyState(row, changed ? [] : S.legal, true);
         if (changed && row.status === "active") refetch();
+      }, (status) => {
+        S.rtUp = (status === "SUBSCRIBED");
+        if (S.rtUp && S._rtWasDown) pollOnce(); // переподключение — доза-fetch упущенного
+        S._rtWasDown = !S.rtUp;
       }));
     }
     function subscribeChatChan() {
@@ -636,6 +651,10 @@
       S.chans.push(API.subscribeChat(S.g.id, (row) => {
         chatMsg({ ...row, p: { username: (S.names && S.names[row.user_id]) || (row.user_id === me.id ? myProfile.username : "?") } });
         U.soundMove();
+      }, (status) => {
+        S.chatUp = (status === "SUBSCRIBED");
+        if (S.chatUp && S._chatWasDown) fetchNewChat();
+        S._chatWasDown = !S.chatUp;
       }));
     }
 
@@ -658,6 +677,7 @@
       clearInterval(ticker);
       pollTimer();
       chatPollTimer();
+      if (S.stopVisible) S.stopVisible();
       if (S.keyHandler) document.removeEventListener("keydown", S.keyHandler);
       S.chans.forEach(API.unsubscribe);
     };

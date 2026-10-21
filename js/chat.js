@@ -26,21 +26,27 @@
     const log = U.qs("#gchat-log", container);
     const seen = new Set();
     let chan = null;
-    const stopPollRef = { stop: null };
+    let blocked = new Set();       // скрывать сообщения заблокированных мною
+    const stopPollRef = { stop: null, stopVisible: null };
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
       seen.add(m.id);
+      if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // скрыто
       const mine = App.user && m.user_id === App.user.id;
       const nm = mine ? ((App.profile && App.profile.username) || "Вы") : nameOf(m.user_id);
+      const who = m.user_id
+        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a>`
+        : `<b>${U.esc(nm)}:</b>`;
       const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}">
-        <b>${U.esc(nm)}:</b> ${U.linkify(m.body)}</div>`);
+        ${who} ${U.linkify(m.body)}</div>`);
       log.appendChild(d);
       while (log.children.length > 200) log.firstChild.remove();
       log.scrollTop = log.scrollHeight;
     }
 
     (async function init() {
+      if (App.user) blocked = await API.blockedIds();
       const { data } = await API.sb.from("chat_messages")
         .select("*, p:profiles(username)")
         .order("created_at", { ascending: false }).limit(50);
@@ -48,7 +54,8 @@
       rows.forEach(m => { if (m.p) nameCache[m.user_id] = m.p.username; });
       if (!App.user) await fetchNames(rows.map(m => m.user_id));
       rows.forEach(addMsg);
-      if (!rows.length) log.innerHTML = `<div class="empty">Пусто. Начните беседу!</div>`;
+      if (!rows.filter(m => !blocked.has(m.user_id)).length)
+        log.innerHTML = `<div class="empty">Пусто. Начните беседу!</div>`;
 
       const me = App.user;
       const inp = U.qs("#gchat-input", container);
@@ -83,15 +90,10 @@
       }
 
       // realtime (RLS: публичное чтение — гостей тоже доставит)
-      chan = API.subscribeInserts("chat_messages", null, async (row) => {
-        if (!(row.user_id in nameCache)) await fetchNames([row.user_id]);
-        log.querySelector(".empty") && log.querySelector(".empty").remove();
-        addMsg(row);
-        if (App.user && row.user_id !== App.user.id) U.soundMove();
-      });
-
-      // fallback-поллинг (если websocket недоступен) — дубли отсекает seen
-      const stopPoll = API.poll(4000, async () => {
+      // доза-fetch новых сообщений: используется и поллингом-фоллбэком,
+      // и при переподключении websocket, и при возврате во вкладку
+      async function fetchFresh() {
+        if (App.user) blocked = await API.blockedIds();
         const { data: fresh } = await API.sb.from("chat_messages")
           .select("*, p:profiles(username)")
           .order("created_at", { ascending: false }).limit(50);
@@ -99,16 +101,34 @@
         fresh.forEach(m => { if (m.p) nameCache[m.user_id] = m.p.username; });
         for (const m of fresh.reverse()) {
           if (seen.has(m.id)) continue;
+          const isBlocked = blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id);
+          seen.add(m.id);
+          if (isBlocked) continue;
           log.querySelector(".empty") && log.querySelector(".empty").remove();
           addMsg(m);
           if (App.user && m.user_id !== App.user.id) U.soundMove();
         }
+      }
+
+      chan = API.subscribeInserts("chat_messages", null, async (row) => {
+        if (!(row.user_id in nameCache)) await fetchNames([row.user_id]);
+        log.querySelector(".empty") && log.querySelector(".empty").remove();
+        addMsg(row);
+        if (App.user && row.user_id !== App.user.id) U.soundMove();
+      }, (status) => {
+        if (status === "SUBSCRIBED" && stopPollRef._everDown) fetchFresh();
+        stopPollRef._everDown = status !== "SUBSCRIBED";
       });
-      stopPollRef.stop = stopPoll;
+
+      // fallback-поллинг — тикает ТОЛЬКО когда websocket не поднялся;
+      // в скрытой вкладке и при живом realtime — ноль запросов
+      stopPollRef.stop = API.poll(4000, fetchFresh, () => API.chUp(chan));
+      stopPollRef.stopVisible = API.onVisible(fetchFresh);
     })();
 
     return function cleanup() {
       if (stopPollRef.stop) stopPollRef.stop();
+      if (stopPollRef.stopVisible) stopPollRef.stopVisible();
       API.unsubscribe(chan);
     };
   }
@@ -137,7 +157,8 @@
     });
 
     const box = U.qs("#dm-list");
-    let stopPoll = null;
+    let stopPoll = null, stopVisible = null, chan = null;
+    let lastSig = "";
 
     async function renderDialogs() {
       const { data: msgs } = await API.sb.from("dm_messages")
@@ -155,6 +176,11 @@
       const list = Object.values(convs).sort((a, b) =>
         U.parseTs(b.last.created_at) - U.parseTs(a.last.created_at));
 
+      // ничего не изменилось — DOM не трогаем (без мерцания)
+      const sig = list.map(c => [c.partner, c.unread, c.last.body, c.last.sender_id === me.id ? 1 : 0].join("~")).join("|");
+      if (sig === lastSig) return;
+      lastSig = sig;
+
       if (!list.length) {
         box.innerHTML = `<div class="empty">Писем пока нет. Нажмите «+ Написать» или
           напишите игроку с его профиля.</div>`;
@@ -166,9 +192,10 @@
         nameCache[c.partner] = pname;
         const out = c.last.sender_id === me.id;
         return `<div class="list-item">
-          <span class="avatar">${U.esc((pname || "?")[0].toUpperCase())}</span>
+          <a href="#/profile/${c.partner}" title="Профиль ${U.esc(pname)}"><span class="avatar">${U.esc((pname || "?")[0].toUpperCase())}</span></a>
           <div style="flex:1;min-width:0">
             <a href="#/dm/${c.partner}" style="font-weight:700">${U.esc(pname)}</a>
+            <a class="muted small" href="#/profile/${c.partner}" title="Профиль"> · профиль</a>
             <div class="muted small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
               ${out ? "<b>Вы:</b> " : ""}${U.esc(c.last.body)}</div>
           </div>
@@ -180,13 +207,23 @@
       }).join("");
     }
     await renderDialogs();
-    // список диалогов обновляется сам (новые письма приходят в ленту)
+    let lastRt = null, _wasDown = false;
+    // список диалогов живёт на realtime: новое письмо — мгновенно;
+    // поллинг тикает только когда websocket не поднялся
+    chan = API.subscribeInserts("dm_messages", null, () => {
+      clearTimeout(lastRt);
+      lastRt = setTimeout(() => renderDialogs().catch(() => {}), 300);
+    }, (status) => {
+      if (status === "SUBSCRIBED" && _wasDown) renderDialogs().catch(() => {});
+      _wasDown = status !== "SUBSCRIBED";
+    });
     stopPoll = API.poll(8000, () => {
       // не трогаем DOM во время набора текста в модалке
       if (U.qs("#modal-root").childElementCount) return;
       renderDialogs().catch(() => {});
-    });
-    return function () { if (stopPoll) stopPoll(); };
+    }, () => API.chUp(chan));
+    stopVisible = API.onVisible(() => renderDialogs().catch(() => {}));
+    return function () { if (stopPoll) stopPoll(); if (stopVisible) stopVisible(); API.unsubscribe(chan); };
   };
 
   const notAuthBox = (text) => `
@@ -231,14 +268,17 @@
 
     const log = U.qs("#dm-log");
     const seen = new Set();
-    let chan = null;
+    let chan = null, stopPoll = null, stopVisible = null;
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
       seen.add(m.id);
       const mine = m.sender_id === me.id;
+      const who = mine
+        ? `<a class="user-link" href="#/profile/${me.id}">Вы:</a>`
+        : `<a class="user-link" href="#/profile/${p.id}">${U.esc(p.username)}:</a>`;
       const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}">
-        <b>${U.esc(mine ? "Вы" : p.username)}:</b> ${U.linkify(m.body)}
+        ${who} ${U.linkify(m.body)}
         <span class="muted tiny">${U.fmtDate(m.created_at)}</span></div>`);
       log.appendChild(d);
       log.scrollTop = log.scrollHeight;
@@ -265,20 +305,9 @@
     U.qs("#dm-send").addEventListener("click", send);
     U.qs("#dm-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
-    chan = API.subscribeInserts("dm_messages", null, async (row) => {
-      const involved = (row.sender_id === me.id && row.recipient_id === p.id) ||
-                       (row.sender_id === p.id && row.recipient_id === me.id);
-      if (!involved) return;
-      log.querySelector(".empty") && log.querySelector(".empty").remove();
-      addMsg(row);
-      if (row.sender_id === p.id) {
-        U.soundMove();
-        await API.markDmsRead(p.id);
-      }
-    });
-
-    // fallback-поллинг переписки (если websocket недоступен) — дубли отсекает seen
-    const stopPoll = API.poll(3000, async () => {
+    // доза-fetch новых писем: общий для поллинга-фоллбэка, переподключения
+    // websocket и возврата во вкладку (дедуп seen — лишнего рендера нет)
+    async function fetchFresh() {
       const { data: fresh } = await API.sb.from("dm_messages")
         .select("*")
         .or(`and(sender_id.eq.${me.id},recipient_id.eq.${p.id}),and(sender_id.eq.${p.id},recipient_id.eq.${me.id})`)
@@ -292,9 +321,29 @@
         if (m.sender_id === p.id) gotNew = true;
       }
       if (gotNew) { U.soundMove(); await API.markDmsRead(p.id); }
+    }
+
+    let _wasDown = false;
+    chan = API.subscribeInserts("dm_messages", null, async (row) => {
+      const involved = (row.sender_id === me.id && row.recipient_id === p.id) ||
+                       (row.sender_id === p.id && row.recipient_id === me.id);
+      if (!involved) return;
+      log.querySelector(".empty") && log.querySelector(".empty").remove();
+      addMsg(row);
+      if (row.sender_id === p.id) {
+        U.soundMove();
+        await API.markDmsRead(p.id);
+      }
+    }, (status) => {
+      if (status === "SUBSCRIBED" && _wasDown) fetchFresh();
+      _wasDown = status !== "SUBSCRIBED";
     });
 
-    return function cleanup() { stopPoll(); API.unsubscribe(chan); };
+    // fallback-поллинг — только когда websocket не поднялся; в скрытой вкладке спит
+    stopPoll = API.poll(3000, fetchFresh, () => API.chUp(chan));
+    stopVisible = API.onVisible(fetchFresh);
+
+    return function cleanup() { if (stopPoll) stopPoll(); if (stopVisible) stopVisible(); API.unsubscribe(chan); };
   };
 
   window.Social = {
