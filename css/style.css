@@ -181,6 +181,7 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
 /* ---------- Доска ---------- */
 .board-wrap { position: relative; }
 .board {
+  position: relative;   /* содержащий блок для SVG-стрелок и промо-окна */
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   grid-template-rows: repeat(8, 1fr);
@@ -188,10 +189,23 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
   aspect-ratio: 1;
   border-radius: 6px; overflow: hidden;
   box-shadow: 0 4px 18px rgba(0,0,0,.18);
-  user-select: none; touch-action: none;
+  /* ТАЧ: запрещаем скролл/зум/выделение, начинающиеся на доске,
+     иначе drag-and-drop пальцем на мобильных прерывается скроллом */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   direction: ltr;
 }
-.sq { position: relative; }
+/* на всякий случай — и для самих клеток/фигур (старые iOS-сафари
+   не всегда учитывают touch-action предков) */
+.board .sq, .board .piece, .board .arrows { touch-action: none; }
+/* SVG-слой стрелок (ПКМ): поверх фигур, клики не перехватывает */
+.board .arrows {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 3;
+}
+.sq { position: relative; touch-action: none; }
 .sq.light { background: var(--board-light); }
 .sq.dark { background: var(--board-dark); }
 .sq.last-from { box-shadow: inset 0 0 0 100vmax rgba(155, 199, 0, 0.41); }

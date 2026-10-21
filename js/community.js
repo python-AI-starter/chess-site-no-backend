@@ -252,15 +252,26 @@
       const log = U.qs("#club-chat-log");
       const names = {};
       const seen = new Set();
+      let pending = [];            // оптимистичные свои сообщения: [{body, el}]
       (members || []).forEach(m => { if (m.p) names[m.user_id] = m.p.username; });
       const addMsg = (m) => {
         if (seen.has(m.id)) return; // realtime + poll могут дублировать
+        // своё сообщение могло быть показано оптимистично раньше RPC:
+        // совпало — считаем подтверждённым, элемент уже стоит
+        if (m.user_id === me.id) {
+          const i = pending.findIndex(p => p.body === m.body);
+          if (i >= 0) {
+            seen.add(m.id);
+            pending.splice(i, 1);
+            return;
+          }
+        }
         seen.add(m.id);
         const name = (m.p && m.p.username) || names[m.user_id] || "?";
         const who = m.user_id
           ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(name)}:</a>`
           : `<b>${U.esc(name)}:</b>`;
-        const d = U.el(`<div class="chat-msg">${who} ${U.linkify(m.body)}</div>`);
+        const d = U.el(`<div class="chat-msg ${m.user_id === me.id ? "mine" : ""}">${who} ${U.linkify(m.body)}</div>`);
         log.appendChild(d);
         log.scrollTop = log.scrollHeight;
       };
@@ -270,8 +281,26 @@
         const body = inp.value.trim();
         if (!body) return;
         inp.value = "";
-        const { error } = await API.sendClubChat(clubId, body);
-        if (error) { U.toast(error.message, "error"); inp.value = body; }
+        log.querySelector(".empty") && log.querySelector(".empty").remove();
+        // ОПТИМИСТИЧНО: сообщение появляется сразу, RPC — в фоне
+        const nm = (App.profile && App.profile.username) || names[me.id] || "Вы";
+        const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.linkify(body)}</div>`);
+        log.appendChild(tmp);
+        log.scrollTop = log.scrollHeight;
+        const pend = { body, el: tmp };
+        pending.push(pend);
+        const { data: res, error } = await API.sendClubChat(clubId, body);
+        if (error) {
+          tmp.remove();
+          const i = pending.indexOf(pend);
+          if (i >= 0) pending.splice(i, 1);
+          U.toast(error.message, "error");
+          inp.value = body;
+          return;
+        }
+        if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+        const i = pending.indexOf(pend);
+        if (i >= 0) pending.splice(i, 1);
       };
       U.qs("#club-chat-send").addEventListener("click", send);
       U.qs("#club-chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });

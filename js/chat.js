@@ -27,10 +27,21 @@
     const seen = new Set();
     let chan = null;
     let blocked = new Set();       // скрывать сообщения заблокированных мною
+    let pending = [];              // оптимистичные свои сообщения: [{body, el}]
     const stopPollRef = { stop: null, stopVisible: null };
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
+      // своё сообщение могло быть показано оптимистично раньше RPC:
+      // совпало — считаем подтверждённым, элемент уже стоит
+      if (App.user && m.user_id === App.user.id) {
+        const i = pending.findIndex(p => p.body === m.body);
+        if (i >= 0) {
+          seen.add(m.id);
+          pending.splice(i, 1);
+          return;
+        }
+      }
       seen.add(m.id);
       if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // скрыто
       const mine = App.user && m.user_id === App.user.id;
@@ -77,10 +88,26 @@
           const body = t.value.trim();
           if (!body) return;
           t.value = "";
-          const { data: res, error } = await API.sendGlobalChat(body);
-          if (error) { U.toast(error.message, "error"); t.value = body; return; }
           log.querySelector(".empty") && log.querySelector(".empty").remove();
-          addMsg(res.message);
+          // ОПТИМИСТИЧНО: показываем сообщение сразу, RPC — в фоне
+          const nm = (App.profile && App.profile.username) || "Вы";
+          const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.linkify(body)}</div>`);
+          log.appendChild(tmp);
+          log.scrollTop = log.scrollHeight;
+          const pend = { body, el: tmp };
+          pending.push(pend);
+          const { data: res, error } = await API.sendGlobalChat(body);
+          if (error) {
+            tmp.remove();
+            const i = pending.indexOf(pend);
+            if (i >= 0) pending.splice(i, 1);
+            U.toast(error.message, "error");
+            t.value = body;
+            return;
+          }
+          if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+          const i = pending.indexOf(pend);
+          if (i >= 0) pending.splice(i, 1);
         };
         U.qs("#gchat-send", inp).addEventListener("click", send);
         U.qs("#gchat-text", inp).addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
@@ -114,7 +141,6 @@
         if (!(row.user_id in nameCache)) await fetchNames([row.user_id]);
         log.querySelector(".empty") && log.querySelector(".empty").remove();
         addMsg(row);
-        if (App.user && row.user_id !== App.user.id) U.soundMove();
       }, (status) => {
         if (status === "SUBSCRIBED" && stopPollRef._everDown) fetchFresh();
         stopPollRef._everDown = status !== "SUBSCRIBED";
@@ -269,9 +295,20 @@
     const log = U.qs("#dm-log");
     const seen = new Set();
     let chan = null, stopPoll = null, stopVisible = null;
+    let pending = [];              // оптимистичные свои сообщения: [{body, el}]
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
+      // своё сообщение могло быть показано оптимистично раньше RPC:
+      // совпало — считаем подтверждённым, элемент уже стоит
+      if (m.sender_id === me.id) {
+        const i = pending.findIndex(p => p.body === m.body);
+        if (i >= 0) {
+          seen.add(m.id);
+          pending.splice(i, 1);
+          return;
+        }
+      }
       seen.add(m.id);
       const mine = m.sender_id === me.id;
       const who = mine
@@ -297,10 +334,26 @@
       const body = t.value.trim();
       if (!body) return;
       t.value = "";
-      const { data: res, error } = await API.sendDm(p.id, body);
-      if (error) { U.toast(error.message, "error"); t.value = body; return; }
       log.querySelector(".empty") && log.querySelector(".empty").remove();
-      addMsg(res.message);
+      // ОПТИМИСТИЧНО: письмо появляется сразу, RPC — в фоне
+      const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">Вы:</a> ${U.linkify(body)}
+        <span class="muted tiny">${U.fmtDate(new Date().toISOString())}</span></div>`);
+      log.appendChild(tmp);
+      log.scrollTop = log.scrollHeight;
+      const pend = { body, el: tmp };
+      pending.push(pend);
+      const { data: res, error } = await API.sendDm(p.id, body);
+      if (error) {
+        tmp.remove();
+        const i = pending.indexOf(pend);
+        if (i >= 0) pending.splice(i, 1);
+        U.toast(error.message, "error");
+        t.value = body;
+        return;
+      }
+      if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+      const i = pending.indexOf(pend);
+      if (i >= 0) pending.splice(i, 1);
     };
     U.qs("#dm-send").addEventListener("click", send);
     U.qs("#dm-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });

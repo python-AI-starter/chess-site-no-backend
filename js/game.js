@@ -47,6 +47,7 @@
       premove: null,           // { from, to, promo } — ход «в уме» (uci-имена клеток)
       flagRetryAt: null,       // отсрочка повторной заявки флага после not_out
       chatSeen: new Set(), lastChatTs: null,
+      chatPending: [],         // оптимистичные сообщения: [{body, el}]
       rtUp: false,             // websocket канала партии жив → поллинг не нужен
       stopVisible: null
     };
@@ -134,18 +135,11 @@
       }
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       if (!myTurn) return;
-      // chess.js проверяет премув ЛОКАЛЬНО: нелегальный после хода соперника
-      // премув просто снимается (семантика README) — на сервер не летит,
-      // страйк за нелегальный ход не создаётся.
-      if (window.Chess) {
-        try {
-          const c = new window.Chess(S.g.fen);
-          const vs = c.moves({ square: p.from, verbose: true }).filter(m => m.to === p.to);
-          if (!vs.length) { clearPremoveState(true); return; }
-        } catch (e) { /* не смогли проверить локально — решит сервер */ }
-      }
+      // премув отправляется СРАЗУ и БЕЗ локальной проверки легальности:
+      // интерфейс не тормозит, окончательный арбитр — сервер. Нелегальный
+      // ход сервер отклонит — отрисовка откатится к состоянию базы.
       clearPremoveState(false);           // снять подсветку заранее
-      onMove(p.from, p.to, p.promo);  // обычная отправка хода
+      onMove(p.from, p.to, p.promo, { isPremove: true });
     }
     async function onPremove(from, to, promo) {
       if (!S.myColor || !S.g || S.g.status !== "active") return;
@@ -520,22 +514,66 @@
       if (data && data.game) await applyState(data.game, false);
     }
 
-    async function onMove(from, to, promo) {
+    // ---------- ОПТИМИСТИЧНЫЙ ХОД ----------
+    // Ход отрисовывается СРАЗУ (позицию пересчитывает chess.js локально),
+    // RPC уходит в фоне. Сервер — окончательный арбитр: если он отклонил
+    // ход, refetch() возвращает доску к состоянию базы.
+    function applyLocalMove(uci) {
+      const g = S.g;
+      if (!g || g.status !== "active" || !window.Chess) return null;
+      let c, mv;
+      try {
+        c = new window.Chess(g.fen);
+        mv = c.move({ from: uci.slice(0, 2), to: uci.slice(2, 4),
+                      promotion: uci.length === 5 ? uci[4] : undefined });
+      } catch (e) { return null; }
+      if (!mv) return null;
+      const nowMs = ServerTime.now();
+      const myWhite = S.myColor === "white";
+      const myRemaining = Math.max(0, remaining(myWhite ? "w" : "b"));
+      const newMyMs = Math.round(myRemaining) + (g.increment_ms || 0);
+      const entry = { u: uci, s: mv.san,
+                      w: myWhite ? newMyMs : g.white_ms,
+                      b: myWhite ? g.black_ms : newMyMs,
+                      t: nowMs };
+      S.g = Object.assign({}, g, {
+        fen: c.fen(),
+        moves: (g.moves || []).concat([entry]),
+        white_ms: myWhite ? newMyMs : g.white_ms,
+        black_ms: myWhite ? g.black_ms : newMyMs,
+        last_move_at: new Date(nowMs).toISOString(),
+        draw_offer_by: null, draw_offer_at: null,
+        takeback_by: null, takeback_at: null
+      });
+      S.legal = computeLegal(S.g);
+      derive(S.g);
+      drawGame();
+      if (mv.captured || /x/.test(mv.san)) U.soundCapture(); else U.soundMove();
+      return mv;
+    }
+
+    async function onMove(from, to, promo, opts) {
       if (S.pendingMove) return;
-      S.pendingMove = true;
-      drawStatus();
       const uci = from + to + (promo || "");
-      const cap = false;
+      const isPremove = !!(opts && opts.isPremove);
+      // обычный ход: рисуем мгновенно, если chess.js считает его легальным;
+      // премув (isPremove): без проверок вообще — решает сервер
+      if (!isPremove && !S.legal.includes(uci)) return;
+      S.pendingMove = true;
+      const local = applyLocalMove(uci);   // мгновенная отрисовка
+      if (!local) drawStatus();            // локально не отрисовалось — покажем «отправляется»
       const { data, error } = await API.makeMove(S.g.id, uci);
       S.pendingMove = false;
-      if (error) {
-        U.toast(error.message, "error");
-        await refetch();
+      if (error || (data && data.ok === false)) {
+        const msg = (error && error.message) || (data && data.error) || "Ход отклонён сервером";
+        U.toast(msg, "error");
+        await refetch();                   // ОТКАТ к серверному состоянию
         return;
       }
-      if (data && data.game) {
-        U.soundMove();
+      if (data && data.game && API.stateKey(data.game) !== API.stateKey(S.g)) {
         await applyState(data.game, false);
+      } else if (!local) {
+        drawStatus();
       }
     }
 
@@ -599,6 +637,16 @@
     const chatLog = U.qs("#chat-log", root);
     function chatMsg(m) {
       if (S.chatSeen.has(m.id)) return; // realtime + poll могут дублировать
+      // своё сообщение могло быть показано оптимистично раньше ответа RPC:
+      // совпало — считаем подтверждённым (id в seen), элемент уже стоит
+      if (me && m.user_id === me.id) {
+        const i = S.chatPending.findIndex(p => p.body === m.body);
+        if (i >= 0) {
+          S.chatSeen.add(m.id);
+          S.chatPending.splice(i, 1);
+          return;
+        }
+      }
       S.chatSeen.add(m.id);
       const nm = (m.p && m.p.username) || (S.names && S.names[m.user_id]) || "?";
       const who = m.user_id
@@ -643,8 +691,26 @@
       const body = inp.value.trim();
       if (!body) return;
       inp.value = "";
-      const { error } = await API.sendChat(S.g.id, body);
-      if (error) { U.toast(error.message, "error"); inp.value = body; }
+      // ОПТИМИСТИЧНО: сообщение появляется мгновенно, RPC — в фоне
+      const nm = (myProfile && myProfile.username) || "Вы";
+      const tmp = U.el(`<div class="chat-msg"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.esc(body)}</div>`);
+      chatLog.appendChild(tmp);
+      chatLog.scrollTop = chatLog.scrollHeight;
+      const pend = { body, el: tmp };
+      S.chatPending.push(pend);
+      const { data, error } = await API.sendChat(S.g.id, body);
+      if (error) {
+        // не ушло — убираем оптимистичное, возвращаем текст
+        tmp.remove();
+        const i = S.chatPending.indexOf(pend);
+        if (i >= 0) S.chatPending.splice(i, 1);
+        U.toast(error.message, "error");
+        inp.value = body;
+        return;
+      }
+      if (data && data.message) S.chatSeen.add(data.message.id); // realtime/poll не задублируют
+      const i = S.chatPending.indexOf(pend);
+      if (i >= 0) S.chatPending.splice(i, 1);
     }
 
     // ---------- realtime + умный fallback-поллинг ----------

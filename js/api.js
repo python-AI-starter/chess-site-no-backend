@@ -50,6 +50,10 @@
         const j = JSON.parse(msg);
         if (j && j.message) msg = j.message;
       } catch (e) { /* не JSON */ }
+      // сетевые сбои (при оптимистичной отрисовке такое видно чаще) —
+      // показываем понятный текст вместо сырцово-браузерного
+      if (/failed to fetch|networkerror|load failed|fetch failed/i.test(msg))
+        msg = "Нет связи с сервером";
       return { data, error: { message: msg, code: error.code } };
     }
     return { data, error: null };
