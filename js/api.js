@@ -97,7 +97,7 @@
   API.sendDm = (rcpt, body) => API.rpc("send_dm", { p_recipient: rcpt, p_body: body });
   API.markDmsRead = (partner) => API.rpc("mark_dms_read", { p_partner: partner });
   API.heartbeat = () => API.rpc("heartbeat");
-  API.getReplay = (id) => API.rpc("get_replay", { p_game_id: id });
+  // реплей считается на клиенте (chess.js) — RPC get_replay больше не используется
 
   // --- Realtime ---
   // Каждая подписка помнит свой статус: "SUBSCRIBED" = websocket жив,

@@ -10,15 +10,28 @@
     checkmate: "Мат",
     resign: "Соперник сдался",
     timeout: "Время вышло",
-    fraud: "Ложное заявление о флаге — обманщик заблокирован навсегда",
+    fraud: "Ложное заявление о флаге",
     abandonment: "Соперник покинул партию",
     agreement: "Ничья по соглашению",
     stalemate: "Пат",
     insufficient_material: "Недостаток материала",
     fifty_moves: "Правило 50 ходов",
     repetition: "Троекратное повторение",
-    forfeit: "Соперник заблокирован"
+    forfeit: "Соперник заблокирован",
+    cheat: "Соперник систематически отправлял нелегальные ходы"
   };
+
+  // Локальная генерация легальных ходов (chess.js 1.4.0, vendored).
+  // Сервер остаётся источником истины: он валидирует отправленный ход и
+  // считает результат партии. Список ходов нужен только интерфейсу
+  // (подсветка/премувы) — больше не запрашиваем его с сервера.
+  function computeLegal(g) {
+    if (!g || g.status !== "active" || !window.Chess) return [];
+    try {
+      const c = new window.Chess(g.fen);
+      return c.moves({ verbose: true }).map(m => m.from + m.to + (m.promotion || ""));
+    } catch (e) { return []; }
+  }
 
   const GamePage_render = async function (container, gameId) {
     let me = null;
@@ -32,6 +45,7 @@
       chatInit: false, chatSub: false, gameSub: false,
       replay: null, replayPly: null, keyHandler: null,
       premove: null,           // { from, to, promo } — ход «в уме» (uci-имена клеток)
+      flagRetryAt: null,       // отсрочка повторной заявки флага после not_out
       chatSeen: new Set(), lastChatTs: null,
       rtUp: false,             // websocket канала партии жив → поллинг не нужен
       stopVisible: null
@@ -60,12 +74,13 @@
       return sideChar === "w" ? g.white_ms : g.black_ms;
     }
 
-    async function applyState(g, legal, fromRemote) {
+    async function applyState(g, fromRemote) {
       if (S.destroyed) return;
       const wasOver = S.g && S.g.status !== "active" && S.g.status !== "waiting";
       const oldLen = S.g ? (S.g.moves || []).length : 0;
       S.g = g;
-      S.legal = legal || [];
+      S.legal = computeLegal(g);
+      S.flagRetryAt = null;   // новое состояние — старая отсрочка флага не нужна
       S.myColor = !me ? null : (g.white === me.id ? "white" : (g.black === me.id ? "black" : null));
       derive(g);
       // партия кончилась / откат — премув больше не имеет смысла
@@ -119,7 +134,16 @@
       }
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       if (!myTurn) return;
-      // соперник сходил — отправляем премув; легальность проверит сервер.
+      // chess.js проверяет премув ЛОКАЛЬНО: нелегальный после хода соперника
+      // премув просто снимается (семантика README) — на сервер не летит,
+      // страйк за нелегальный ход не создаётся.
+      if (window.Chess) {
+        try {
+          const c = new window.Chess(S.g.fen);
+          const vs = c.moves({ square: p.from, verbose: true }).filter(m => m.to === p.to);
+          if (!vs.length) { clearPremoveState(true); return; }
+        } catch (e) { /* не смогли проверить локально — решит сервер */ }
+      }
       clearPremoveState(false);           // снять подсветку заранее
       onMove(p.from, p.to, p.promo);  // обычная отправка хода
     }
@@ -133,7 +157,7 @@
     async function refetch() {
       const { data, error } = await API.gameState(gameId);
       if (error) { U.toast(error.message, "error"); return; }
-      await applyState(data.game, data.legal_moves, true);
+      await applyState(data.game, true);
     }
 
     // ---------- разметка ----------
@@ -233,15 +257,29 @@
       if (S.replayPly == null || S.replayPly >= mv.length) list.scrollTop = list.scrollHeight;
     }
 
-    // ---------- перемотка завершённой партии ----------
+    // ---------- перемотка завершённой партии (локально, chess.js) ----------
     function lastUci() {
       const mv = S.g.moves || [];
       return mv.length ? mv[mv.length - 1].u : null;
     }
-    async function initReplay() {
+    function buildReplayData(g) {
+      // позиции после каждого полухода считает chess.js на клиенте —
+      // RPC get_replay больше не нужен
+      const fens = [];
+      try {
+        const c = new window.Chess(g.start_fen);
+        for (const m of (g.moves || [])) {
+          c.move({ from: m.u.slice(0, 2), to: m.u.slice(2, 4),
+                   promotion: m.u.length === 5 ? m.u[4] : undefined });
+          fens.push(c.fen());
+        }
+      } catch (e) { return { ok: false, start_fen: g.start_fen, fens: [], moves: g.moves || [] }; }
+      return { ok: true, start_fen: g.start_fen, fens, moves: g.moves || [] };
+    }
+    function initReplay() {
       if (S.replay || !S.g || (S.g.status !== "finished" && S.g.status !== "aborted")) return;
-      const { data } = await API.getReplay(gameId);
-      if (!data || !data.ok || S.destroyed) return;
+      const data = buildReplayData(S.g);
+      if (!data.ok || S.destroyed) return;
       S.replay = data;
       S.replayPly = (data.fens || []).length;
       drawReplayBar();
@@ -354,7 +392,7 @@
           joinBtn.disabled = true;
           const { data, error } = await API.joinGame(g.id);
           if (error) { joinBtn.disabled = false; return U.toast(error.message, "error"); }
-          if (data && data.game) await applyState(data.game, data.legal_moves || [], false);
+          if (data && data.game) await applyState(data.game, false);
         });
         if (isHost) {
           U.qs("#copy-inv", c).addEventListener("click", () => {
@@ -479,7 +517,7 @@
     async function act(fn, ...args) {
       const { data, error } = await fn(...args);
       if (error) { U.toast(error.message, "error"); await refetch(); return; }
-      if (data && data.game) await applyState(data.game, data.legal_moves || [], false);
+      if (data && data.game) await applyState(data.game, false);
     }
 
     async function onMove(from, to, promo) {
@@ -497,7 +535,7 @@
       }
       if (data && data.game) {
         U.soundMove();
-        await applyState(data.game, data.legal_moves || [], false);
+        await applyState(data.game, false);
       }
     }
 
@@ -511,10 +549,14 @@
         await refetch();
         return;
       }
-      if (data && data.status === "fraud") {
-        U.toast("Заявка о флаге была ложной: победа засчитана сопернику, вы заблокированы навсегда.", "error");
+      if (data && data.status === "not_out") {
+        // по СЕРВЕРНЫМ часам время соперника ещё не вышло: никаких санкций,
+        // просто повторим позже (клиентские часы могли спешить)
+        S.flagClaimed = false;
+        S.flagRetryAt = ServerTime.now() + 2000;
+        return;
       }
-      if (data && data.game) await applyState(data.game, [], false);
+      if (data && data.game) await applyState(data.game, false);
     }
 
     // ---------- тикер часов ----------
@@ -534,11 +576,13 @@
         el.classList.toggle("active", isTurn);
       }
       // авто-заявка флага: часы соперника кончились, консервативное время
-      // >= дедлайн + запас. Ложным быть не может: клиентские оценки опаздывают.
+      // >= дедлайн + запас. Если сервер ответил not_out — повторяем с
+      // отсрочкой, без санкций (бан за ложное заявление убран).
       if (S.myColor && !S.flagClaimed && !S.pendingMove) {
         const oppChar = S.myColor === "white" ? "b" : "w";
         if (S.stm === oppChar && S.stmDeadline != null &&
-            ServerTime.now() >= S.stmDeadline + CFG.AUTO_FLAG_DELAY_MS) {
+            ServerTime.now() >= S.stmDeadline + CFG.AUTO_FLAG_DELAY_MS &&
+            (!S.flagRetryAt || ServerTime.now() >= S.flagRetryAt)) {
           doClaimFlag(false);
         }
       }
@@ -615,7 +659,7 @@
         const { data } = await API.gameState(gameId);
         if (!data || !data.ok || S.destroyed) return;
         if (API.stateKey(data.game) !== API.stateKey(S.g)) {
-          applyState(data.game, data.legal_moves || [], true);
+          applyState(data.game, true);
         }
       } catch (e) { /* сеть моргнула — попробуем в следующий тик */ }
     }
@@ -633,12 +677,8 @@
       S.gameSub = true;
       S.chans.push(API.subscribeGame(S.g.id, (row) => {
         if (API.stateKey(row) === API.stateKey(S.g)) return; // дубликат после poll
-        // позиция изменилась -> старый список легальных ходов недействителен,
-        // свежий придёт refetch-ом (иначе доска «залипает» на чужих ходах)
-        const changed = (row.moves || []).length !== (S.g.moves || []).length ||
-                        row.status !== S.g.status;
-        applyState(row, changed ? [] : S.legal, true);
-        if (changed && row.status === "active") refetch();
+        // легальные ходы считаем локально (chess.js) — refetch не нужен
+        applyState(row, true);
       }, (status) => {
         S.rtUp = (status === "SUBSCRIBED");
         if (S.rtUp && S._rtWasDown) pollOnce(); // переподключение — доза-fetch упущенного
@@ -665,12 +705,12 @@
         <p><a href="#/">← Вернуться в лобби</a></p></div>`;
       return () => {};
     }
-    await applyState(data.game, data.legal_moves, false);
+    await applyState(data.game, false);
     ServerTime.sync();
     await loadNames();
     await initChat();
     subscribe();
-    initReplay(); // реплей для завершённых партий
+    initReplay(); // реплей для завершённых партий (локально, без RPC)
 
     return function cleanup() {
       S.destroyed = true;

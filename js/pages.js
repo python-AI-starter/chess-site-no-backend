@@ -267,15 +267,33 @@
 
   async function expandReplay(slot, gameId) {
     slot.innerHTML = `<div class="center" style="padding:10px"><span class="spinner"></span> Загрузка…</div>`;
-    const { data, error } = await API.getReplay(gameId);
-    if (error || !data || !data.ok) {
+    // ходы и стартовая позиция берутся напрямую из таблицы — позиции после
+    // каждого полухода считает chess.js на клиенте (RPC get_replay не нужен)
+    const { data, error } = await API.sb.from("games")
+      .select("start_fen,moves").eq("id", gameId).maybeSingle();
+    if (error || !data) {
       slot.innerHTML = `<div class="empty">Не удалось загрузить партию</div>`;
+      return;
+    }
+    const fens = [];
+    try {
+      const c = new window.Chess(data.start_fen);
+      for (const m of (data.moves || [])) {
+        c.move({ from: m.u.slice(0, 2), to: m.u.slice(2, 4),
+                 promotion: m.u.length === 5 ? m.u[4] : undefined });
+        fens.push(c.fen());
+      }
+    } catch (e) {
+      slot.innerHTML = `<div class="empty">Не удалось восстановить партию</div>`;
       return;
     }
     slot.innerHTML = "";
     const wrap = document.createElement("div");
     slot.appendChild(wrap);
-    openReplay = new ChessReplay(wrap, { replay: data, orientation: "white", keyboard: true });
+    openReplay = new ChessReplay(wrap, {
+      replay: { ok: true, start_fen: data.start_fen, fens, moves: data.moves || [] },
+      orientation: "white", keyboard: true
+    });
   }
 
   const LeaderboardPage_render = async function (container) {
