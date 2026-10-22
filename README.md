@@ -20,8 +20,7 @@ Chess logic is split in two:
 
 The hot path is light: one move means one FEN parse, one move
 application, and one SAN computation, with no redundant move
-generation (mid-game measurements: ~0.47 ms versus ~1.9 ms in the
-original design; `get_game_state` ~0.23 ms versus ~0.82 ms).
+generation.
 
 ## Quick start
 
