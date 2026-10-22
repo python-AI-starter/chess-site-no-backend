@@ -4,9 +4,11 @@
   "use strict";
 
   class ChessReplay {
-    // opts: { replay: {ok,start_fen,fens,moves}, orientation?, keyboard? }
+    // opts: { replay: {ok,start_fen,fens,moves}, orientation?, keyboard?,
+    //         onChange?(ply) }  — onChange fires on every position change
     constructor(container, opts) {
       this.root = container;
+      this.opts = opts || {};
       this.data = opts.replay;
       this.total = (this.data.fens || []).length;
       this.ply = this.total;              // start at the final position
@@ -117,6 +119,7 @@
           }
         }
       }
+      if (this.opts.onChange) { try { this.opts.onChange(this.ply); } catch (e) {} }
     }
 
     destroy() {

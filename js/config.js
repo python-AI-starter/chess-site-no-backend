@@ -9,5 +9,12 @@ window.SITE_CONFIG = {
   // must pass the deadline plus this margin before claiming
   FLAG_CLAIM_MARGIN_MS: 1000,
   // auto-claim the flag once the opponent clock reads zero
-  AUTO_FLAG_DELAY_MS: 1200
+  AUTO_FLAG_DELAY_MS: 1200,
+  // Stockfish 19 WASM (npm package "stockfish", ~94 MB with the embedded
+  // NNUE net). Loaded by the browser from a third-party CDN and cached in
+  // Cache Storage; the database is never involved. The base below must
+  // serve the package /bin files with CORS enabled.
+  ENGINE_CDN_BASE: "https://unpkg.com/stockfish@19.0.1/bin",
+  // memory cap (MB) offered in the engine settings
+  ENGINE_HASH_MAX_MB: 1024
 };

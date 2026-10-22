@@ -118,7 +118,33 @@ so email links lead back to it.
 - Replay: recent games on the leaderboard expand into a replay (board,
   controls, clickable move list, keyboard arrows, autoplay that does
   not stall after the first half-move); finished games have the same
-  replay with the same autoplay button on their page.
+  replay with the same autoplay button on their page. Every replay and
+  every game page carries FEN and PGN export: FEN is taken from the
+  position currently shown (any replay ply, the live position of a
+  running game), PGN is assembled client-side with chess.js and tagged
+  with players, Elo, result, and the time control. The export opens in
+  a modal with copy and download buttons.
+- Engine analysis with Stockfish 19 WASM (the npm stockfish build,
+  ~94 MB with the embedded NNUE network). The engine runs entirely in
+  the browser: the binaries are fetched from a third-party CDN
+  (unpkg) by the client, kept in the browser Cache Storage, and the
+  database never sees any engine traffic. The web worker is created
+  from the cached loader, so reopening analysis after closing the tab
+  neither re-downloads nor re-instantiates anything; the worker itself
+  stays alive for the whole page session. Available on the standalone
+  analysis board (#/analysis), on finished game pages (a toggle next
+  to the move list), and right inside the leaderboard "Watch" replay.
+  The panel shows a Lichess-style evaluation bar, numbered SAN
+  variations, depth and speed, best-move arrows on the board, and a
+  gear menu with the search time per move (infinite or fixed), the
+  number of variations (MultiPV 1-5), threads, and the hash memory
+  size; settings persist in localStorage. The multi-threaded build is
+  used automatically when the browser is cross-origin isolated,
+  otherwise the single-threaded build runs and threads stay at 1.
+- Analysis board (#/analysis, link in the navbar): free board for both
+  colors, move list with keyboard navigation, FEN loading from a
+  query parameter (#/analysis?fen=...) or an input field, move undo,
+  position reset, and FEN/PGN export of the line.
 - Open challenges mirror the quick-pairing queue: the list shows every
   player searching through "Быстрая игра" (the seeks table, publicly
   readable, so guests see it too). Own seeks appear in the list at
@@ -192,6 +218,11 @@ locales/ru.json         Russian interface strings
 locales/en.json         English interface strings
 locales/zh.json         Chinese interface strings
 js/api.js               Supabase client, RPC wrappers, Realtime helpers
+js/exporter.js          FEN/PGN export (chess.js PGN builder, copy/download modal)
+js/engine.js            Stockfish 19 WASM host: CDN fetch, Cache Storage,
+                        blob worker, UCI bridge
+js/analysis.js          engine analysis panel (eval, MultiPV lines, gear
+                        menu) and the #/analysis board page
 js/time.js              conservative server-time synchronization
 js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
 js/board.js             board rendering, click-click and drag&drop, arrows and circles
@@ -233,3 +264,9 @@ sql/11_admin_moderation.sql  creator/admin roles, mutes, deletions, bans
 The cburnett piece set is (c) Colin M.L. Burnett, licensed
 CC-BY-SA 3.0 / GFDL, source: Wikimedia Commons
 (https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces).
+
+Stockfish 19 (the WASM build fetched at runtime from the npm CDN) is
+GPL-3.0, (c) the Stockfish developers
+(https://github.com/official-stockfish/Stockfish); the engine binaries
+are never bundled with the site files and are not stored in the
+repository or the database.

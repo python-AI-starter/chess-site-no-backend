@@ -332,7 +332,14 @@
   };
 
   // leaderboard (bullet / blitz / rapid / classic pools)
-  let openReplay = null; // only one replay stays expanded
+  let openReplay = null;      // only one replay stays expanded
+  let openReplayPanel = null; // engine panel bound to the open replay
+
+  function destroyOpenReplay() {
+    if (openReplayPanel) { openReplayPanel.destroy(); openReplayPanel = null; }
+    if (openReplay) { openReplay.destroy(); openReplay = null; }
+  }
+
   const POOLS = [
     { key: "bullet",  col: "rating_bullet",  games: "games_bullet" },
     { key: "blitz",   col: "rating_blitz",   games: "games_blitz" },
@@ -345,7 +352,7 @@
     return POOLS.find(p => p.key === k) || POOLS[0];
   }
 
-  async function expandReplay(slot, gameId) {
+  async function expandReplay(slot, gameId, meta) {
     slot.innerHTML = `<div class="center" style="padding:10px"><span class="spinner"></span> ${U.esc(t("common.loading"))}</div>`;
     // moves and the start FEN come straight from the table; positions are computed client-side with chess.js
     const { data, error } = await API.sb.from("games")
@@ -369,9 +376,46 @@
     slot.innerHTML = "";
     const wrap = document.createElement("div");
     slot.appendChild(wrap);
+    // FEN / PGN export and the engine toggle under the replay
+    const bar = document.createElement("div");
+    bar.className = "export-row";
+    bar.innerHTML = `
+      <button class="btn ghost small" data-x="fen" title="${U.esc(t("export.fenTitle"))}">${U.esc(t("export.fenBtn"))}</button>
+      <button class="btn ghost small" data-x="pgn" title="${U.esc(t("export.pgnTitle"))}">${U.esc(t("export.pgnBtn"))}</button>
+      <button class="btn ghost small" data-x="an">⚙ ${U.esc(t("analysis.engineCard"))}</button>`;
+    slot.appendChild(bar);
+    const anSlot = document.createElement("div");
+    slot.appendChild(anSlot);
     openReplay = new ChessReplay(wrap, {
       replay: { ok: true, start_fen: data.start_fen, fens, moves: data.moves || [] },
-      orientation: "white", keyboard: true
+      orientation: "white", keyboard: true,
+      onChange: () => { if (openReplayPanel && openReplayPanel.on) openReplayPanel.sync(); }
+    });
+    U.qs('[data-x="fen"]', bar).addEventListener("click", () =>
+      Exporter.exportFen(openReplay.fenAt(openReplay.ply)));
+    U.qs('[data-x="pgn"]', bar).addEventListener("click", () => {
+      Exporter.exportPgn({
+        startFen: data.start_fen, moves: data.moves || [],
+        result: meta && meta.result, status: "finished",
+        rated: !!(meta && meta.rated),
+        initial_ms: meta && meta.initial_ms, increment_ms: (meta && meta.increment_ms) || 0,
+        finished_at: meta && meta.finished_at
+      }, {
+        white: meta && meta.wp ? meta.wp.username : undefined,
+        black: meta && meta.bp ? meta.bp.username : undefined
+      });
+    });
+    U.qs('[data-x="an"]', bar).addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      const opening = !openReplayPanel;
+      if (openReplayPanel) { openReplayPanel.destroy(); openReplayPanel = null; }
+      if (opening) {
+        openReplayPanel = new AnalysisPanel(anSlot, {
+          getFen: () => openReplay.fenAt(openReplay.ply),
+          getBoard: () => openReplay.board
+        });
+      }
+      btn.classList.toggle("active", opening);
     });
   }
 
@@ -443,20 +487,19 @@
         if (!slot.classList.contains("hidden")) {
           slot.classList.add("hidden");
           b.textContent = t("lb.watch");
-          if (openReplay) { openReplay.destroy(); openReplay = null; }
+          destroyOpenReplay();
           return;
         }
         U.qsa(".rp-slot", container).forEach(s => s.classList.add("hidden"));
         U.qsa("[data-watch]", container).forEach(x => x.textContent = t("lb.watch"));
-        if (openReplay) { openReplay.destroy(); openReplay = null; }
+        destroyOpenReplay();
         slot.classList.remove("hidden");
         b.textContent = t("lb.hide");
-        expandReplay(slot, b.dataset.watch);
+        expandReplay(slot, b.dataset.watch,
+          (recent || []).find(x => x.id === b.dataset.watch) || null);
       }));
 
-    return () => {
-      if (openReplay) { openReplay.destroy(); openReplay = null; }
-    };
+    return () => destroyOpenReplay();
   }
 
   function renderRecent(games) {

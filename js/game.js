@@ -53,7 +53,8 @@
       chatSeen: new Set(), lastChatTs: null,
       chatPending: [],         // optimistic messages: [{body, el}]
       rtUp: false,             // game channel websocket up: polling not needed
-      stopVisible: null
+      stopVisible: null,
+      panel: null              // engine analysis panel (finished games)
     };
 
     container.innerHTML = `<div class="card center"><span class="spinner"></span> ${U.esc(t("game.loading"))}</div>`;
@@ -172,11 +173,23 @@
       <div>
         <div class="card" id="status-card"></div>
         <div class="card">
-          <h3 class="spread row">${U.esc(t("game.moves"))} <button class="btn ghost small" id="flip">${U.esc(t("game.flip"))}</button></h3>
+          <h3 class="spread row">${U.esc(t("game.moves"))}
+            <span class="row" style="gap:6px">
+              <button class="btn ghost small hidden" id="analysis-toggle" title="${U.esc(t("analysis.engineCard"))}">⚙ ${U.esc(t("analysis.engineCard"))}</button>
+              <button class="btn ghost small" id="flip">${U.esc(t("game.flip"))}</button>
+            </span></h3>
           <div class="moves-list" id="moves"></div>
+          <div class="export-row">
+            <button class="btn ghost small" id="exp-fen" title="${U.esc(t("export.fenTitle"))}">${U.esc(t("export.fenBtn"))}</button>
+            <button class="btn ghost small" id="exp-pgn" title="${U.esc(t("export.pgnTitle"))}">${U.esc(t("export.pgnBtn"))}</button>
+            <a class="muted small hidden" id="exp-ab-link" href="#/analysis">${U.esc(t("analysis.openBoard"))}</a>
+          </div>
           <div class="replay-bar" id="replaybar" style="display:none"></div>
           <div class="game-actions" id="actions"></div>
           <div id="drawbox"></div>
+        </div>
+        <div class="card hidden" id="analysis-card">
+          <div id="analysis-box"></div>
         </div>
         <div class="card" id="chat-card" style="display:none">
           <h3>${U.esc(t("game.chat"))}</h3>
@@ -192,6 +205,48 @@
     </div>`);
     container.innerHTML = "";
     container.appendChild(root);
+
+    // FEN of the position currently shown (live board or replay position)
+    function currentFen() {
+      const g = S.g;
+      if (!g) return "";
+      if (S.replay && S.replayPly != null) {
+        return S.replayPly === 0 ? S.replay.start_fen : S.replay.fens[S.replayPly - 1];
+      }
+      return g.fen;
+    }
+
+    U.qs("#exp-fen", root).addEventListener("click", () => {
+      const fen = currentFen();
+      if (fen) Exporter.exportFen(fen);
+    });
+    U.qs("#exp-pgn", root).addEventListener("click", () => {
+      const g = S.g;
+      if (!g) return;
+      const clean = (id) => ((S.names && S.names[id]) || "").replace(" 🚫", "") || undefined;
+      Exporter.exportPgn(g, {
+        white: clean(g.white), black: clean(g.black),
+        whiteElo: S.ratings ? S.ratings[g.white] : undefined,
+        blackElo: S.ratings ? S.ratings[g.black] : undefined
+      });
+    });
+    U.qs("#analysis-toggle", root).addEventListener("click", () => {
+      const card = U.qs("#analysis-card", root);
+      const opening = card.classList.contains("hidden");
+      card.classList.toggle("hidden", !opening);
+      U.qs("#analysis-toggle", root).classList.toggle("active", opening);
+      if (opening) {
+        if (!S.panel) {
+          S.panel = new AnalysisPanel(U.qs("#analysis-box", root), {
+            getFen: currentFen,
+            getBoard: () => S.board
+          });
+        }
+        S.panel.sync();
+      } else if (S.panel) {
+        S.panel.turnOff();   // free the CPU; the engine stays cached
+      }
+    });
 
     S.board = new ChessBoard(U.qs("#board", root), {
       onMove: onMove,
@@ -352,6 +407,7 @@
       S.board.setInteractive(false);
       updateReplayPos();
       movesList();
+      if (S.panel && S.panel.on) S.panel.sync();   // follow the shown position
     }
 
     function checkSquare() {
@@ -390,6 +446,13 @@
       movesList();
       drawStatus();
       drawActions();
+      // engine analysis and the analysis-board link exist for ended games
+      const over = g.status === "finished" || g.status === "aborted";
+      U.qs("#analysis-toggle", root).classList.toggle("hidden", !over);
+      const abLink = U.qs("#exp-ab-link", root);
+      abLink.classList.toggle("hidden", !over);
+      if (over) abLink.href = "#/analysis?fen=" + encodeURIComponent(currentFen());
+      if (S.panel && S.panel.on) S.panel.sync();
     }
 
     function drawStatus() {
@@ -828,6 +891,7 @@
       chatPollTimer();
       if (S.stopVisible) S.stopVisible();
       if (S.keyHandler) document.removeEventListener("keydown", S.keyHandler);
+      if (S.panel) S.panel.destroy();
       S.chans.forEach(API.unsubscribe);
     };
   };

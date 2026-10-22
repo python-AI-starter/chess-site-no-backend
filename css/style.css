@@ -441,3 +441,53 @@ html.dark .mod-panel { border-color: #3c5a7a; }
 /* replay autoplay button, visually distinct from the step button */
 .replay-autoplay { font-weight: 700; color: var(--accent-dark); border-color: var(--accent) !important; }
 html.dark .replay-autoplay { color: #9ec7e8; }
+
+/* FEN/PGN export row under the move list */
+.export-row {
+  display: flex; gap: 6px; margin-top: 10px;
+  padding-top: 10px; border-top: 1px dashed var(--line);
+  align-items: center; flex-wrap: wrap;
+}
+.export-row .muted { margin-left: auto; }
+.export-modal .export-text {
+  width: 100%; min-height: 140px; resize: vertical; font: 12.5px/1.45 ui-monospace,
+    SFMono-Regular, Menlo, Consolas, monospace; white-space: pre;
+  background: var(--panel2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 6px; padding: 8px;
+}
+
+/* engine analysis panel */
+.engine-panel { display: flex; flex-direction: column; gap: 8px; }
+.engine-head { display: flex; align-items: center; gap: 8px; }
+.engine-head .ep-toggle { white-space: nowrap; }
+.engine-head .ep-stat { flex: 1; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-gear { font-size: 15px; padding: 2px 8px; }
+.eval-bar {
+  position: relative; height: 14px; border-radius: 4px; overflow: hidden;
+  background: #403d39; border: 1px solid var(--line);
+}
+.eval-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 50%;
+  background: #e8e6e0; transition: width .25s ease; }
+html.dark .eval-fill { background: #f2f0ec; }
+.eval-num {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  font-size: 10.5px; font-weight: 700; color: #fff;
+  text-shadow: 0 1px 2px rgba(0,0,0,.8); line-height: 1;
+}
+.engine-lines { display: flex; flex-direction: column; gap: 2px; min-height: 24px; }
+.engine-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 4px;
+  border-radius: 4px; background: var(--panel2); }
+.engine-line:nth-child(1) { background: var(--panel3); }
+.el-score { font-weight: 700; min-width: 52px; text-align: right; font-variant-numeric: tabular-nums; }
+.el-score.good { color: var(--good); }
+.el-score.bad { color: var(--bad); }
+.el-pv { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--ink); }
+
+/* engine settings modal */
+.engine-settings select { width: 100%; }
+.engine-settings p { margin: 2px 0 10px; }
+
+/* standalone analysis board */
+.ab-toolbar input#ab-fen { flex: 1; min-width: 0; font-size: 12.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+#ab-replaybar { margin-bottom: 6px; }

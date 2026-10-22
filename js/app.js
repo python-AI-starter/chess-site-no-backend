@@ -29,7 +29,7 @@
 
     // instant active-menu highlight without network
     updateNav() {
-      const page = (location.hash || "#/").replace(/^#\//, "").split("/")[0] || "lobby";
+      const page = ((location.hash || "#/").replace(/^#\//, "").split(/[/?]/)[0]) || "lobby";
       U.qsa("#nav-links a").forEach(a =>
         a.classList.toggle("active", a.dataset.nav === page));
     },
@@ -117,7 +117,11 @@
       const app = U.qs("#app");
       if (this.cleanup) { try { this.cleanup(); } catch (e) {} this.cleanup = null; }
       const hash = location.hash || "#/";
-      const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
+      // optional query part (#/analysis?fen=...) is separated before routing
+      const raw = hash.replace(/^#\//, "");
+      const qIdx = raw.indexOf("?");
+      const query = qIdx >= 0 ? new URLSearchParams(raw.slice(qIdx + 1)) : null;
+      const parts = (qIdx >= 0 ? raw.slice(0, qIdx) : raw).split("/").filter(Boolean);
       const page = parts[0] || "";
       const arg = parts[1] || null;
 
@@ -126,6 +130,7 @@
       try {
         if (page === "") await wrap(LobbyPage.render);
         else if (page === "game") await wrap(GamePage.render, arg);
+        else if (page === "analysis") await wrap(AnalysisBoardPage.render, query ? query.get("fen") : null);
         else if (page === "login") await wrap(Pages.login);
         else if (page === "signup") await wrap(Pages.signup);
         else if (page === "profile") await wrap(Pages.profile, arg || (this.profile && this.profile.id));

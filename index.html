@@ -6,7 +6,7 @@
 <title>Ladya</title>
 <meta name="description" content="Simple online chess.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9820;</text></svg>">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 <script>
 // apply the saved theme before first paint to avoid a light flash
 try {
@@ -20,6 +20,7 @@ try {
   <a class="brand" href="#/">&#9820; Ladya</a>
   <nav class="navlinks" id="nav-links">
     <a href="#/" data-nav="lobby" data-i18n="nav.play">Play</a>
+    <a href="#/analysis" data-nav="analysis" data-i18n="nav.analysis">Analysis</a>
     <a href="#/leaderboard" data-nav="leaderboard" data-i18n="nav.rating">Rating</a>
     <a href="#/forum" data-nav="forum" data-i18n="nav.forum">Forum</a>
     <a href="#/clubs" data-nav="clubs" data-i18n="nav.clubs">Clubs</a>
@@ -40,19 +41,22 @@ try {
 
 <script src="vendor/supabase.js?v=1"></script>
 <script src="vendor/chess.js?v=1"></script>
-<script src="js/config.js?v=1"></script>
+<script src="js/config.js?v=2"></script>
 <script src="js/i18n.js?v=1"></script>
-<script src="js/util.js?v=7"></script>
+<script src="js/util.js?v=8"></script>
 <script src="js/time.js?v=1"></script>
 <script src="js/api.js?v=10"></script>
+<script src="js/exporter.js?v=2"></script>
 <script src="js/pieces.js?v=1"></script>
 <script src="js/board.js?v=6"></script>
+<script src="js/engine.js?v=3"></script>
+<script src="js/analysis.js?v=3"></script>
 <script src="js/lobby.js?v=8"></script>
-<script src="js/game.js?v=13"></script>
-<script src="js/replay.js?v=3"></script>
-<script src="js/pages.js?v=9"></script>
+<script src="js/game.js?v=14"></script>
+<script src="js/replay.js?v=4"></script>
+<script src="js/pages.js?v=10"></script>
 <script src="js/community.js?v=8"></script>
 <script src="js/chat.js?v=8"></script>
-<script src="js/app.js?v=7"></script>
+<script src="js/app.js?v=8"></script>
 </body>
 </html>
