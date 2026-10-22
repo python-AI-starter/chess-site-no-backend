@@ -71,6 +71,7 @@
   API.cancelWaiting = (id) => API.rpc("cancel_waiting_game", { p_game_id: id });
   API.joinGame = (id) => API.rpc("join_game", { p_game_id: id });
   API.resign = (id) => API.rpc("resign", { p_game_id: id });
+  API.abortGame = (id) => API.rpc("abort_game", { p_game_id: id });
   API.claimFlag = (id) => API.rpc("claim_flag", { p_game_id: id });
   API.claimAbandon = (id) => API.rpc("claim_abandon", { p_game_id: id });
   API.offerDraw = (id) => API.rpc("offer_draw", { p_game_id: id });

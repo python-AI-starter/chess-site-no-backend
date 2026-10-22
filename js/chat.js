@@ -14,14 +14,15 @@
   }
   const nameOf = (id) => nameCache[id] || "?";
 
-  // moderator buttons on a message (creator/admin): delete plus mute.
-  // Public chats only; game chat and DMs are never moderated.
+  // moderator buttons on a message (creator/admin): delete, plus mute
+  // for other people's messages (muting yourself is denied). Public
+  // chats only; game chat and DMs are never moderated.
   function modActionsHtml(m) {
-    if (!U.amMod()) return "";
-    if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
+    if (!U.amMod() || !m.user_id) return "";
+    const own = App.user && m.user_id === App.user.id;
     return `<span class="msg-mod">
-      <button class="mod-btn" data-amute="${m.user_id}" data-aid="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>
-      <button class="mod-btn" data-adel="${m.id}" data-akind="${m.kind}" title="Удалить сообщение">×</button>
+      ${own ? "" : `<button class="mod-btn" data-amute="${m.user_id}" data-aid="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>`}
+      <button class="mod-btn" data-adel="${m.id}" data-akind="${m.kind}" title="${own ? "Удалить своё сообщение" : "Удалить сообщение"}">×</button>
     </span>`;
   }
 
@@ -69,19 +70,7 @@
     let pending = [];              // own optimistic messages: [{body, el}]
     const stopPollRef = { stop: null, stopVisible: null };
 
-    function addMsg(m) {
-      if (seen.has(m.id)) return;
-      // own message already shown optimistically: treat the match as confirmation
-      if (App.user && m.user_id === App.user.id) {
-        const i = pending.findIndex(p => p.body === m.body);
-        if (i >= 0) {
-          seen.add(m.id);
-          pending.splice(i, 1);
-          return;
-        }
-      }
-      seen.add(m.id);
-      if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // hidden
+    function renderMsg(m) {
       const mine = App.user && m.user_id === App.user.id;
       const nm = mine ? ((App.profile && App.profile.username) || "Вы") : nameOf(m.user_id);
       const who = m.user_id
@@ -92,6 +81,22 @@
       log.appendChild(d);
       while (log.children.length > 200) log.firstChild.remove();
       log.scrollTop = log.scrollHeight;
+    }
+
+    function addMsg(m) {
+      if (seen.has(m.id)) return;
+      // own message already shown optimistically: the match confirms it,
+      // the optimistic copy is replaced by the full node (with actions)
+      if (App.user && m.user_id === App.user.id) {
+        const i = pending.findIndex(p => p.body === m.body);
+        if (i >= 0) {
+          seen.add(m.id);
+          pending.splice(i, 1)[0].el.remove();
+        }
+      }
+      seen.add(m.id);
+      if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // hidden
+      renderMsg(m);
     }
 
     (async function init() {
@@ -144,9 +149,16 @@
             t.value = body;
             return;
           }
-          if (res && res.message) seen.add(res.message.id); // no duplicates later
-          const i = pending.indexOf(pend);
-          if (i >= 0) pending.splice(i, 1);
+          if (res && res.message) {
+            // confirm the optimistic copy and re-render the full node
+            // (with moderation actions) unless realtime already did it
+            const i = pending.indexOf(pend);
+            if (!seen.has(res.message.id)) {
+              seen.add(res.message.id);
+              if (i >= 0) pending.splice(i, 1)[0].el.remove();
+              renderMsg(res.message);
+            } else if (i >= 0) pending.splice(i, 1);
+          }
         };
         U.qs("#gchat-send", inp).addEventListener("click", send);
         U.qs("#gchat-text", inp).addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
@@ -170,7 +182,7 @@
           seen.add(m.id);
           if (isBlocked) continue;
           log.querySelector(".empty") && log.querySelector(".empty").remove();
-          addMsg(m);
+          renderMsg(m);
           if (App.user && m.user_id !== App.user.id) U.soundMove();
         }
       }

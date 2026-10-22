@@ -20,7 +20,8 @@ Chess logic is split in two:
 
 The hot path is light: one move means one FEN parse, one move
 application, and one SAN computation, with no redundant move
-generation.
+generation (mid-game measurements: ~0.47 ms versus ~1.9 ms in the
+original design; `get_game_state` ~0.23 ms versus ~0.82 ms).
 
 ## Quick start
 
@@ -53,6 +54,9 @@ so email links lead back to it.
   per class (start 1000, K=32, class derived from the control), link
   challenges, direct challenges to a player (only the invitee can
   accept, the invite arrives as a DM), and spectating other games.
+  Either player may abort a fresh game with no rating change until
+  both players have made one move (exclusive); after that the game
+  ends only through its normal outcomes.
 - Premoves, Lichess style: while the opponent is thinking, stage a move
   by click or drag (including promotion) to any square with no local
   legality checks; it is sent automatically once the opponent moves,
@@ -72,18 +76,22 @@ so email links lead back to it.
   repetition, fifty-move rule, insufficient material, agreement draw,
   and abandonment (claimable after 3/5 minutes of inactivity).
 - In game: chat (participants only, Realtime, rate limited), draw
-  offers, resign, and takeback. A takeback asks the opponent to allow
-  replaying the last move; on approval the engine recomputes the
-  position and both clocks are restored.
+  offers, resign, abort, and takeback. A draw offer is shown to its
+  author like a premove (it stays pending until the opponent answers)
+  and can be cancelled any time before the acceptance. A takeback asks
+  the opponent to allow replaying the last move; on approval the
+  engine recomputes the position and both clocks are restored.
 - Pieces: the cburnett vector set (the Lichess classic) inlined as SVG,
   sharp at any scale, no external requests.
-- Community: forum (threads plus replies), clubs (club page with
-  description, member list, and live club chat), blog (posts with
-  editing), leaderboard, and profiles.
+- Community: forum (threads plus replies), clubs (club page with an
+  owner-editable description, member exclusion by the owner, member
+  list, and live club chat), blog (posts with editing), leaderboard,
+  and profiles.
 - Pool leaderboards with tabs for bullet, blitz, rapid, and classic;
   profiles show every rating.
 - Moderation (CREATOR and ADMIN roles): badges in profiles and chats,
-  deleting any public message (global chat, club chat, forum replies),
+  deleting any public message including their own (global chat, club
+  chat, forum replies; muting yourself is denied),
   muting authors for N minutes (default 15; a mute blocks global chat,
   club chat, forum, and blog, but never game chat or DMs), deleting any
   club, forum thread, blog post, or account (double confirmation),
@@ -101,10 +109,14 @@ so email links lead back to it.
   controls, clickable move list, keyboard arrows, autoplay that does
   not stall after the first half-move); finished games have the same
   replay on their page.
-- Open challenges are always visible: the list refreshes through both
-  Realtime and plain polling even with a live websocket, plus a manual
-  refresh button and a server-time freshness window. The author sees an
-  Open button, everyone else sees Accept with an immediate start.
+- Open challenges mirror the quick-pairing queue: the list shows every
+  player searching through "Быстрая игра" (the seeks table, publicly
+  readable, so guests see it too). Accepting a seek joins the same
+  pool and pairs with its owner at once; the author gets a Cancel
+  button. Link challenges stay private (joinable only through their
+  link) and direct challenges reach the invitee as a DM, so neither
+  appears in the list. The list refreshes through Realtime and plain
+  polling even with a live websocket, plus a manual refresh button.
 - Realtime with a smart fallback: opponent moves, chats, DMs,
   challenges, and notifications arrive instantly over websockets.
   While a websocket is up, polling is fully off; if Realtime is
@@ -148,7 +160,7 @@ decides everything:
 
 | Layer | Protection |
 |---|---|
-| RLS on every table | `profiles`, `games`, `seeks`, `game_chat`, `club_chat`, `chat_messages`, `dm_messages`, `forum_*`, `clubs`, `club_members`, `blog_posts`; global chat and games are publicly readable, DMs only for the participants, writes through policies or RPC-only |
+| RLS on every table | `profiles`, `games`, `seeks`, `game_chat`, `club_chat`, `chat_messages`, `dm_messages`, `forum_*`, `clubs`, `club_members`, `blog_posts`; global chat, games, and quick-pairing seeks are publicly readable, DMs only for the participants, writes through policies or RPC-only |
 | Games via RPC only | `games` has no INSERT/UPDATE/DELETE policies, so a game cannot be modified directly; `make_move` checks membership, turn, legality (the database engine), and clocks |
 | Keys | only the `sb_publishable_...` key ships with the frontend; the secret key was used only during setup and never reaches the client |
 | Functions | all `security definer` with `SET search_path = public`; mutation rights revoked from `anon` |

@@ -16,7 +16,8 @@
     fifty_moves: "Правило 50 ходов",
     repetition: "Троекратное повторение",
     forfeit: "Соперник заблокирован",
-    cheat: "Соперник систематически отправлял нелегальные ходы"
+    cheat: "Соперник систематически отправлял нелегальные ходы",
+    abort: "Партия отменена — рейтинг не изменился"
   };
 
   // Local legal-move generation with the vendored chess.js 1.4.0.
@@ -452,13 +453,16 @@
       if (g.status !== "active" || !S.myColor) { box.innerHTML = drawRematchHtml(); bindRematch(); return; }
 
       const oppOffer = g.draw_offer_by && me && g.draw_offer_by !== me.id;
+      const myOffer = g.draw_offer_by && me && g.draw_offer_by === me.id;
       const myTb = g.takeback_by && me && g.takeback_by === me.id;
       const oppTb = g.takeback_by && me && g.takeback_by !== me.id;
       const hasMoves = (g.moves || []).length >= 1;
+      const canAbort = (g.moves || []).length < 2;
       box.innerHTML = `
         <button class="btn" id="act-draw">½ Ничья</button>
         <button class="btn ${(!hasMoves || oppTb || myTb) ? "hidden" : ""}" id="act-takeback">↩ Взять ход</button>
         <button class="btn" id="act-resign">⚑ Сдаться</button>
+        ${canAbort ? `<button class="btn" id="act-abort" title="Отмена без изменения рейтинга">✖ Отменить партию</button>` : ""}
         <button class="btn danger hidden" id="act-flag">🏳 Флаг!</button>`;
       if (oppOffer) {
         db.innerHTML = `<div class="draw-box"><span>Соперник предлагает ничью</span>
@@ -466,6 +470,14 @@
           <button class="btn ghost small" id="d-decline">Отклонить</button></div>`;
         U.qs("#d-accept", db).addEventListener("click", () => act(() => API.acceptDraw(S.g.id)));
         U.qs("#d-decline", db).addEventListener("click", () => act(() => API.declineDraw(S.g.id)));
+      }
+      if (myOffer) {
+        // my pending draw offer is shown like a premove: it stays on the
+        // board until the opponent answers, and I may cancel it anytime
+        db.insertAdjacentHTML("beforeend", `<div class="draw-box premove-box">
+          <span>Ничья предложена — сыграет, когда соперник согласится</span>
+          <button class="btn ghost small" id="d-cancel">Отменить</button></div>`);
+        U.qs("#d-cancel", db).addEventListener("click", () => act(() => API.declineDraw(S.g.id)));
       }
       if (oppTb) {
         db.insertAdjacentHTML("beforeend", `<div class="draw-box"><span>Соперник просит взять ход назад</span>
@@ -481,6 +493,13 @@
       U.qs("#act-draw", box).addEventListener("click", () => act(() => API.offerDraw(S.g.id)));
       const tbBtn = U.qs("#act-takeback", box);
       if (tbBtn) tbBtn.addEventListener("click", () => act(() => API.requestTakeback(S.g.id)));
+      const abortBtn = U.qs("#act-abort", box);
+      if (abortBtn) abortBtn.addEventListener("click", async () => {
+        if (!(await U.confirmModal("Отменить партию?",
+            "Партия прервётся без изменения рейтинга. Доступно, пока оба игрока не сделали по одному ходу.",
+            "Отменить партию"))) return;
+        act(() => API.abortGame(S.g.id));
+      });
       U.qs("#act-resign", box).addEventListener("click", async () => {
         if (await U.confirmModal("Сдаться?", "Партия будет проиграна.", "Сдаться")) act(() => API.resign(S.g.id));
       });

@@ -33,6 +33,7 @@
         </div>
         <div class="card">
           <h2>Открытые вызовы</h2>
+          <p class="muted small">Игроки, которые ищут соперника через «Быструю игру». Войдите, чтобы принять вызов.</p>
           <div id="open-list"><span class="spinner"></span></div>
         </div>` : `
         <div class="card hidden" id="my-games"></div>
@@ -74,7 +75,8 @@
         <div class="card">
           <h2 class="spread row">Открытые вызовы
             <button class="btn ghost small" id="open-refresh" title="Обновить список">⟳ Обновить</button></h2>
-          <p class="muted small">Вызовы видны всем: нажмите «Принять», чтобы начать партию. Свой вызов открывается кнопкой «Открыть».</p>
+          <p class="muted small">Все, кто ищет соперника через «Быструю игру»: нажмите «Принять», чтобы начать партию с этим контролем.
+          Вызовы по ссылке в списке не публикуются.</p>
           <div id="open-list"><span class="spinner"></span></div>
         </div>`}
       <div class="card">
@@ -88,48 +90,69 @@
     let disposed = false;
     const cleanupFns = [() => { if (!disposed) gcCleanup(); }];
 
-    if (!me) {
-      // guests see open challenges read-only; polling always runs (no
-      // realtime for guests) with a server-time freshness window.
-      async function loadOpenGuest() {
-        const box = U.qs("#open-list");
-        if (!box) return;
-        const since = new Date(ServerTime.now() - 3600 * 1000).toISOString();
-        const { data, error } = await API.sb.from("games")
-          .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
-          .eq("status", "waiting").is("invitee", null)
-          .gte("created_at", since)
-          .order("created_at", { ascending: false })
-          .limit(20);
-        if (error) {
-          box.dataset.err = "1";
-          box.innerHTML = `<div class="empty">Не удалось загрузить вызовы · <a href="#/">Обновить</a></div>`;
-          return;
-        }
-        const rows = (data || []).map(g => {
-          const host = g.white ? g.wp : g.bp;
-          const hostId = g.white || g.black;
-          return `<tr>
-            <td><a href="#/profile/${hostId}">${U.esc(host ? host.username : "?")}</a>
-                <span class="muted">(${host ? host.rating : "?"})</span></td>
-            <td><b>${U.fmtTc(g.initial_ms, g.increment_ms)}</b></td>
-            <td>${g.rated ? '<span class="badge rated">рейтинг</span>' : '<span class="badge">дружеская</span>'}</td>
-            <td><a class="btn small" href="#/login">Войти</a></td>
-          </tr>`;
-        });
-        const html = rows.length
-          ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
-          : `<div class="empty">Пока нет открытых вызовов</div>`;
-        const sig = (data || []).map(g => g.id + g.status).join(",");
-        if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw
-        box.dataset.sig = sig;
-        box.dataset.err = "0";
-        box.innerHTML = html;
+    // Open challenges = quick-pairing seeks. They are exactly the players
+    // who searched an opponent through "Быстрая игра": accepting a seek
+    // joins the same pool and pairs with its owner at once. Link
+    // challenges stay private (joinable only through their link) and
+    // direct challenges reach the invitee as a DM, so neither shows here.
+    let openDebounce = null;
+    const scheduleOpen = () => { clearTimeout(openDebounce); openDebounce = setTimeout(loadOpen, 250); };
+    async function loadOpen() {
+      const box = U.qs("#open-list");
+      if (!box) return;
+      const { data, error } = await API.sb.from("seeks")
+        .select("id,user_id,initial_ms,increment_ms,created_at,p:profiles!seeks_user_id_fkey(id,username,rating)")
+        .order("created_at", { ascending: true })
+        .limit(20);
+      if (error) {
+        box.dataset.err = "1";
+        box.innerHTML = `<div class="empty">Не удалось загрузить вызовы · <a href="#/">Обновить</a></div>`;
+        return;
       }
-      loadOpenGuest();
-      const t = API.poll(4000, loadOpenGuest); // always ticks for guests
-      const stopVis = API.onVisible(loadOpenGuest);
-      cleanupFns.push(() => { t(); stopVis(); });
+      const rows = (data || []).map(s => {
+        const own = me && s.user_id === me.id;
+        return `<tr>
+          <td><a href="#/profile/${s.user_id}">${U.esc(s.p ? s.p.username : "?")}</a>
+              <span class="muted">(${s.p ? s.p.rating : "?"})</span>
+              ${own ? '<span class="badge finished">это ваш вызов</span>' : ""}</td>
+          <td><b>${U.fmtTc(s.initial_ms, s.increment_ms)}</b></td>
+          <td><span class="badge rated">рейтинг</span></td>
+          <td>${own
+            ? `<button class="btn small" data-unseek="${s.id}">Отмена</button>`
+            : me
+              ? `<button class="btn primary small" data-accept="${s.initial_ms}:${s.increment_ms}">Принять</button>`
+              : `<a class="btn small" href="#/login">Войти</a>`}</td>
+        </tr>`;
+      });
+      const html = rows.length
+        ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
+        : `<div class="empty">Пока нет открытых вызовов — нажмите «Быстрая игра»!</div>`;
+      const sig = (data || []).map(s => `${s.user_id}:${s.initial_ms}:${s.increment_ms}`).join(",");
+      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw
+      box.dataset.sig = sig;
+      box.dataset.err = "0";
+      box.innerHTML = html;
+      U.qsa("[data-unseek]", box).forEach(b => b.addEventListener("click", async () => {
+        b.disabled = true;
+        await API.cancelSeek();
+        loadOpen();
+      }));
+      U.qsa("[data-accept]", box).forEach(b => b.addEventListener("click", () => {
+        const [ms, inc] = b.dataset.accept.split(":").map(Number);
+        startSeek(ms, inc);
+      }));
+    }
+
+    if (!me) {
+      // guests see open challenges read-only (seeks are publicly
+      // readable; joining requires signing in), with polling and a
+      // manual refresh
+      loadOpen();
+      const t = API.poll(4000, loadOpen); // always ticks for guests
+      const stopVis = API.onVisible(loadOpen);
+      const openRefreshBtn = U.qs("#open-refresh");
+      if (openRefreshBtn) openRefreshBtn.addEventListener("click", loadOpen);
+      cleanupFns.push(() => { t(); stopVis(); clearTimeout(openDebounce); });
       return function cleanup() { cleanupFns.forEach(f => f()); };
     }
 
@@ -208,66 +231,23 @@
       location.hash = `#/game/${data}`;
     });
 
-    // open challenges
-    // Reliability first: the list refreshes via realtime and via polling
-    // even while the websocket is up, so challenges always show up.
-    async function loadOpen() {
-      const box = U.qs("#open-list");
-      if (!box) return;
-      const since = new Date(ServerTime.now() - 3600 * 1000).toISOString();
-      const { data, error } = await API.sb.from("games")
-        .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
-        .eq("status", "waiting")
-        .gte("created_at", since)
-        .order("created_at", { ascending: false })
-        .limit(20);
-      if (error) {
-        box.dataset.err = "1";
-        box.innerHTML = `<div class="empty">Не удалось загрузить вызовы — попробуйте «⟳ Обновить»</div>`;
-        return;
-      }
-      const visible = (data || []).filter(g => !g.invitee || g.invitee === me.id);
-      const rows = visible
-        .map(g => {
-          const isHost = g.white === me.id || g.black === me.id;
-          const host = g.white ? g.wp : g.bp;
-          const hostId = g.white || g.black;
-          const invited = g.invitee && g.invitee === me.id;
-          return `<tr>
-          <td><a href="#/profile/${hostId}">${U.esc(host ? host.username : "?")}</a>
-              <span class="muted">(${host ? host.rating : "?"})</span>
-              ${invited ? '<span class="badge active">вас приглашают</span>' : ""}
-              ${isHost ? '<span class="badge finished">это ваш вызов</span>' : ""}</td>
-          <td><b>${U.fmtTc(g.initial_ms, g.increment_ms)}</b></td>
-          <td>${g.rated ? '<span class="badge rated">рейтинг</span>' : '<span class="badge">дружеская</span>'}</td>
-          <td>${isHost
-            ? `<a class="btn small" href="#/game/${g.id}">Открыть</a>`
-            : `<button class="btn primary small" data-join="${g.id}">Принять</button>`}</td>
-        </tr>`;
-        });
-      const sig = visible.map(g => g.id).join(",");
-      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw and rebinding
-      box.dataset.sig = sig;
-      box.dataset.err = "0";
-      box.innerHTML = rows.length
-        ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
-        : `<div class="empty">Пока нет открытых вызовов — создайте свой!</div>`;
-      U.qsa("[data-join]", box).forEach(b => b.addEventListener("click", async () => {
-        b.disabled = true;
-        const { error } = await API.joinGame(b.dataset.join);
-        if (error) { b.disabled = false; return U.toast(error.message, "error"); }
-        location.hash = `#/game/${b.dataset.join}`;
-      }));
-    }
+    // open challenges: refresh via seeks realtime plus polling, so the
+    // list always reflects the quick-pairing queue
     const openRefreshBtn = U.qs("#open-refresh");
     if (openRefreshBtn) openRefreshBtn.addEventListener("click", loadOpen);
     loadOpen();
     let rtDebounce = null, _wasDown = false, rtChan = null;
-    const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 250); };
+    const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(loadMyGames, 250); };
     rtChan = API.subscribeInserts("games", null, rtRefresh, (status) => {
       if (status === "SUBSCRIBED" && _wasDown) { loadOpen(); loadMyGames(); } // refetch after reconnect
       _wasDown = status !== "SUBSCRIBED";
     }, ["INSERT", "UPDATE"]);
+    // seeks changes (new, updated, removed) redraw the open list at once
+    let _seekDown = false;
+    const seekChan = API.subscribeInserts("seeks", null, scheduleOpen, (status) => {
+      if (status === "SUBSCRIBED" && _seekDown) loadOpen();
+      _seekDown = status !== "SUBSCRIBED";
+    }, ["INSERT", "UPDATE", "DELETE"]);
     // polling always runs so challenges stay visible
     const openTimer = API.poll(4000, loadOpen);
     const myTimer = API.poll(6000, loadMyGames);
@@ -280,7 +260,9 @@
       myTimer();
       stopVisible();
       clearTimeout(rtDebounce);
+      clearTimeout(openDebounce);
       API.unsubscribe(rtChan);
+      API.unsubscribe(seekChan);
       if (seeking) API.cancelSeek();
       cleanupFns.forEach(f => f());
     };

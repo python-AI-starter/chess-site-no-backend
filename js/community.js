@@ -14,13 +14,15 @@
     return await API.profile(me.id);
   }
   const isMod = (pr) => !!pr && (pr.role === "creator" || pr.role === "admin");
-  // moderator buttons on club chat messages, as in the global chat
+  // moderator buttons on club chat messages, as in the global chat:
+  // delete for any message including the moderator's own (muting
+  // yourself is denied), mute for other people's messages only
   function clubModActionsHtml(m) {
-    if (!U.amMod()) return "";
-    if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
+    if (!U.amMod() || !m.user_id) return "";
+    const own = App.user && m.user_id === App.user.id;
     return `<span class="msg-mod">
-      <button class="mod-btn" data-amute="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>
-      <button class="mod-btn" data-adel="${m.id}" data-akind="club" title="Удалить сообщение">×</button>
+      ${own ? "" : `<button class="mod-btn" data-amute="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>`}
+      <button class="mod-btn" data-adel="${m.id}" data-akind="club" title="${own ? "Удалить своё сообщение" : "Удалить сообщение"}">×</button>
     </span>`;
   }
 
@@ -241,7 +243,8 @@
       </div>
       <div class="club-layout">
         <div>
-          <div class="card"><h3>О клубе</h3>
+          <div class="card"><h3 class="spread row">О клубе
+            ${isOwner ? `<button class="btn ghost small" id="edit-desc" title="Описание видят все">✎ Изменить описание</button>` : ""}</h3>
             <p class="content-text">${c.description ? U.esc(c.description)
               : '<span class="muted">Описание пока не добавлено.</span>'}</p>
           </div>
@@ -297,6 +300,19 @@
       const { error } = await API.adminDeleteClub(clubId);
       if (error) U.toast(error.message, "error"); else location.hash = "#/clubs";
     });
+    const editDesc = U.qs("#edit-desc");
+    if (editDesc) editDesc.addEventListener("click", async () => {
+      const res = await U.formModal("Описание клуба", [
+        { id: "desc", label: "Описание (до 1000 символов)", type: "textarea", rows: 5,
+          maxlength: 1000, value: c.description || "", placeholder: "О чём клуб?" }
+      ], "Сохранить");
+      if (!res) return;
+      const { error } = await API.sb.from("clubs")
+        .update({ description: res.desc.trim() }).eq("id", clubId);
+      if (error) return U.toast(error.message, "error");
+      U.toast("Описание обновлено", "good");
+      App.route();
+    });
     U.qsa("[data-kick]").forEach(b => b.addEventListener("click", async () => {
       const { error } = await API.sb.from("club_members").delete()
         .eq("club_id", clubId).eq("user_id", b.dataset.kick);
@@ -313,18 +329,7 @@
       const seen = new Set();
       let pending = [];            // own optimistic messages: [{body, el}]
       (members || []).forEach(m => { if (m.p) { names[m.user_id] = m.p.username; roles[m.user_id] = m.p.role || "user"; } });
-      const addMsg = (m) => {
-        if (seen.has(m.id)) return; // realtime and polling may duplicate
-        // own message already shown optimistically: treat the match as confirmation
-        if (m.user_id === me.id) {
-          const i = pending.findIndex(p => p.body === m.body);
-          if (i >= 0) {
-            seen.add(m.id);
-            pending.splice(i, 1);
-            return;
-          }
-        }
-        seen.add(m.id);
+      const renderMsg = (m) => {
         const name = (m.p && m.p.username) || names[m.user_id] || "?";
         const who = m.user_id
           ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(name)}:</a> ${U.roleBadge(m.p && m.p.role || roles[m.user_id])}`
@@ -332,6 +337,20 @@
         const d = U.el(`<div class="chat-msg ${m.user_id === me.id ? "mine" : ""}">${who} ${U.linkify(m.body)}${clubModActionsHtml(m)}</div>`);
         log.appendChild(d);
         log.scrollTop = log.scrollHeight;
+      };
+      const addMsg = (m) => {
+        if (seen.has(m.id)) return; // realtime and polling may duplicate
+        // own message already shown optimistically: the match confirms it,
+        // the optimistic copy is replaced by the full node (with actions)
+        if (m.user_id === me.id) {
+          const i = pending.findIndex(p => p.body === m.body);
+          if (i >= 0) {
+            seen.add(m.id);
+            pending.splice(i, 1)[0].el.remove();
+          }
+        }
+        seen.add(m.id);
+        renderMsg(m);
       };
       msgs.forEach(addMsg);
       // club chat moderation: delete a message or mute the author (delegated)
@@ -382,9 +401,16 @@
           inp.value = body;
           return;
         }
-        if (res && res.message) seen.add(res.message.id); // no duplicates later
-        const i = pending.indexOf(pend);
-        if (i >= 0) pending.splice(i, 1);
+        if (res && res.message) {
+          // confirm the optimistic copy and re-render the full node
+          // (with moderation actions) unless realtime already did it
+          const i = pending.indexOf(pend);
+          if (!seen.has(res.message.id)) {
+            seen.add(res.message.id);
+            if (i >= 0) pending.splice(i, 1)[0].el.remove();
+            renderMsg(res.message);
+          } else if (i >= 0) pending.splice(i, 1);
+        }
       };
       U.qs("#club-chat-send").addEventListener("click", send);
       U.qs("#club-chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
