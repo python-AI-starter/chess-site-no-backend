@@ -1,4 +1,4 @@
-// Shared UI helpers.
+// Shared UI helpers. All user-visible text goes through I18n.t.
 (function () {
   "use strict";
 
@@ -51,7 +51,7 @@
 
   U.fmtDate = function (ts) {
     const d = new Date(typeof ts === "number" ? ts : U.parseTs(ts));
-    return d.toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleString(I18n.locale(), { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   };
 
   U.toast = function (msg, kind) {
@@ -72,8 +72,8 @@
             <h3>${U.esc(title)}</h3>
             <p>${U.esc(text || "")}</p>
             <div class="modal-actions">
-              <button class="btn ghost" data-act="no">Отмена</button>
-              <button class="btn danger" data-act="yes">${U.esc(okLabel || "Да")}</button>
+              <button class="btn ghost" data-act="no">${U.esc(I18n.t("common.cancel"))}</button>
+              <button class="btn danger" data-act="yes">${U.esc(okLabel || I18n.t("common.yes"))}</button>
             </div>
           </div>
         </div>`);
@@ -87,14 +87,14 @@
 
   // Double confirmation for irreversible moderation actions: ask, then confirm.
   U.confirmDanger = async function (title, text, okLabel) {
-    if (!(await U.confirmModal(title, text, okLabel || "Да"))) return false;
-    return U.confirmModal("Точно?", "Действие необратимо. Подтвердите окончательно.", "Да, точно");
+    if (!(await U.confirmModal(title, text, okLabel || I18n.t("common.yes")))) return false;
+    return U.confirmModal(I18n.t("common.sureTitle"), I18n.t("common.sureText"), I18n.t("common.yesSure"));
   };
 
   // Player role badge (creator/admin) for profiles and chats
   U.roleBadge = function (role) {
-    if (role === "creator") return '<span class="badge role-badge role-creator" title="Создатель сайта">★ создатель</span>';
-    if (role === "admin") return '<span class="badge role-badge role-admin" title="Администратор">🛡 админ</span>';
+    if (role === "creator") return `<span class="badge role-badge role-creator" title="${U.esc(I18n.t("role.creatorTitle"))}">${I18n.t("role.creator")}</span>`;
+    if (role === "admin") return `<span class="badge role-badge role-admin" title="${U.esc(I18n.t("role.adminTitle"))}">${I18n.t("role.admin")}</span>`;
     return "";
   };
   // True when the current user is a moderator (creator/admin)
@@ -107,7 +107,7 @@
     const root = U.qs("#modal-root");
     root.innerHTML = "";
     const m = U.el(`<div class="modal-overlay"><div class="modal">${html}
-      <div class="modal-actions"><button class="btn primary" data-act="ok">ОК</button></div></div></div>`);
+      <div class="modal-actions"><button class="btn primary" data-act="ok">${U.esc(I18n.t("common.ok"))}</button></div></div></div>`);
     m.addEventListener("click", (e) => {
       if (e.target === m || e.target.closest("[data-act=ok]")) root.innerHTML = "";
     });
@@ -158,8 +158,8 @@
             ${body}
             <div class="err" id="fm-err"></div>
             <div class="modal-actions">
-              <button type="button" class="btn ghost" data-act="cancel">Отмена</button>
-              <button type="submit" class="btn primary">${U.esc(okLabel || "Сохранить")}</button>
+              <button type="button" class="btn ghost" data-act="cancel">${U.esc(I18n.t("common.cancel"))}</button>
+              <button type="submit" class="btn primary">${U.esc(okLabel || I18n.t("common.save"))}</button>
             </div>
           </form>
         </div>`);

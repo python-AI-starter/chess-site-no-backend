@@ -3,6 +3,8 @@
 (function () {
   "use strict";
 
+  const t = (key, params) => I18n.t(key, params);
+
   // username cache for realtime rows
   const nameCache = {};
   const roleCache = {};          // id -> role (user/creator/admin) for badges
@@ -21,9 +23,24 @@
     if (!U.amMod() || !m.user_id) return "";
     const own = App.user && m.user_id === App.user.id;
     return `<span class="msg-mod">
-      ${own ? "" : `<button class="mod-btn" data-amute="${m.user_id}" data-aid="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>`}
-      <button class="mod-btn" data-adel="${m.id}" data-akind="${m.kind}" title="${own ? "Удалить своё сообщение" : "Удалить сообщение"}">×</button>
+      ${own ? "" : `<button class="mod-btn" data-amute="${m.user_id}" data-aid="${m.user_id}" title="${U.esc(t("mod.muteAuthorTitle"))}">🔇</button>`}
+      <button class="mod-btn" data-adel="${m.id}" data-akind="${m.kind}" title="${U.esc(own ? t("mod.delOwnTitle") : t("mod.delTitle"))}">×</button>
     </span>`;
+  }
+
+  // shared mute dialog for delegated moderation handlers
+  async function muteDialog(target, fallbackName) {
+    const nm = nameCache[target] || fallbackName || t("mod.playerFallback");
+    const res = await U.formModal(t("mod.muteTitle", { name: nm }), [
+      { id: "mins", label: t("mod.minutes"), value: "15", type: "text" },
+      { id: "reason", label: t("mod.reason"), maxlength: 200, placeholder: t("mod.spam") }
+    ], t("mod.muteBtn"));
+    if (!res) return;
+    const mins = Math.round(Number(res.mins));
+    if (!(mins >= 1 && mins <= 10080)) return U.toast(t("mod.minutesInvalid"), "error");
+    const { error } = await API.adminMute(target, mins, res.reason.trim());
+    if (error) U.toast(error.message, "error");
+    else U.toast(t("mod.muted", { name: nm, mins }), "good");
   }
 
   // delegated moderation handlers for a chat log container
@@ -32,26 +49,15 @@
       const del = e.target.closest("[data-adel]");
       const mute = e.target.closest("[data-amute]");
       if (del) {
-        if (!(await U.confirmModal("Удалить сообщение?", "", "Удалить"))) return;
+        if (!(await U.confirmModal(t("mod.delMsgQ"), "", t("common.delete")))) return;
         const { error } = await API.adminDeleteMessage(del.dataset.akind, del.dataset.adel);
         if (error) return U.toast(error.message, "error");
         const node = del.closest(".chat-msg");
         if (node) node.remove();
-        U.toast("Сообщение удалено", "good");
+        U.toast(t("mod.msgDeleted"), "good");
         if (refresh) refresh();
       } else if (mute) {
-        const target = mute.dataset.amute;
-        const nm = nameCache[target] || "игрока";
-        const res = await U.formModal("Мут игрока " + nm, [
-          { id: "mins", label: "Минут (1–10080)", value: "15", type: "text" },
-          { id: "reason", label: "Причина (необязательно)", maxlength: 200, placeholder: "спам" }
-        ], "Замутить");
-        if (!res) return;
-        const mins = Math.round(Number(res.mins));
-        if (!(mins >= 1 && mins <= 10080)) return U.toast("Минуты: от 1 до 10080", "error");
-        const { error } = await API.adminMute(target, mins, res.reason.trim());
-        if (error) U.toast(error.message, "error");
-        else U.toast(`${nm} замучен на ${mins} мин (чаты/форум/блог)`, "good");
+        await muteDialog(mute.dataset.amute);
       }
     });
   }
@@ -72,7 +78,7 @@
 
     function renderMsg(m) {
       const mine = App.user && m.user_id === App.user.id;
-      const nm = mine ? ((App.profile && App.profile.username) || "Вы") : nameOf(m.user_id);
+      const nm = mine ? ((App.profile && App.profile.username) || t("chat.you")) : nameOf(m.user_id);
       const who = m.user_id
         ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a> ${U.roleBadge(roleCache[m.user_id])}`
         : `<b>${U.esc(nm)}:</b>`;
@@ -110,7 +116,7 @@
       bindModHandlers(log);
       rows.forEach(addMsg);
       if (!rows.filter(m => !blocked.has(m.user_id)).length)
-        log.innerHTML = `<div class="empty">Пусто. Начните беседу!</div>`;
+        log.innerHTML = `<div class="empty">${U.esc(t("chat.empty"))}</div>`;
 
       const me = App.user;
       const inp = U.qs("#gchat-input", container);
@@ -125,16 +131,16 @@
           }
         }
         inp.innerHTML = `
-          <input id="gchat-text" maxlength="500" placeholder="Сообщение…">
+          <input id="gchat-text" maxlength="500" placeholder="${U.esc(t("chat.placeholder"))}">
           <button class="btn primary" id="gchat-send">→</button>`;
         const send = async () => {
-          const t = U.qs("#gchat-text", container);
-          const body = t.value.trim();
+          const inpEl = U.qs("#gchat-text", container);
+          const body = inpEl.value.trim();
           if (!body) return;
-          t.value = "";
+          inpEl.value = "";
           log.querySelector(".empty") && log.querySelector(".empty").remove();
           // optimistic: show instantly, RPC in the background
-          const nm = (App.profile && App.profile.username) || "Вы";
+          const nm = (App.profile && App.profile.username) || t("chat.you");
           const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.linkify(body)}</div>`);
           log.appendChild(tmp);
           log.scrollTop = log.scrollHeight;
@@ -146,7 +152,7 @@
             const i = pending.indexOf(pend);
             if (i >= 0) pending.splice(i, 1);
             U.toast(error.message, "error");
-            t.value = body;
+            inpEl.value = body;
             return;
           }
           if (res && res.message) {
@@ -163,8 +169,7 @@
         U.qs("#gchat-send", inp).addEventListener("click", send);
         U.qs("#gchat-text", inp).addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
       } else {
-        inp.innerHTML = `<div class="empty" style="padding:6px">Войдите, чтобы писать в общий чат ·
-          <a href="#/login">вход</a> / <a href="#/signup">регистрация</a></div>`;
+        inp.innerHTML = `<div class="empty" style="padding:6px">${t("chat.guestHint")}</div>`;
       }
 
       // realtime (RLS allows public reads, so guests receive rows too);
@@ -208,26 +213,30 @@
     };
   }
 
+  const notAuthBox = (text) => `
+    <div class="empty">${text || t("common.authOnly")} ·
+      <a href="#/login">${t("nav.login")}</a> / <a href="#/signup">${t("nav.signup")}</a></div>`;
+
   // Dialog list
   const MessagesPage_render = async function (container) {
     const me = App.user || await API.user();
     container.innerHTML = `
-      <div class="row spread"><h1>Сообщения</h1>
-        ${me ? `<button class="btn primary" id="dm-new">+ Написать</button>`
+      <div class="row spread"><h1>${U.esc(t("dm.title"))}</h1>
+        ${me ? `<button class="btn primary" id="dm-new">${U.esc(t("dm.new"))}</button>`
              : notAuthBox("")}</div>
       <div class="card" id="dm-list"><span class="spinner"></span></div>`;
     if (!me) { U.qs("#dm-list").innerHTML = ""; return () => {}; }
 
       U.qs("#dm-new").addEventListener("click", async () => {
-      const res = await U.formModal("Новое сообщение", [
-        { id: "name", label: "Ник получателя", maxlength: 20, placeholder: "например, Magnus" }
-      ], "Открыть переписку");
+      const res = await U.formModal(t("dm.newTitle"), [
+        { id: "name", label: t("dm.recipient"), maxlength: 20, placeholder: t("dm.recipientPh") }
+      ], t("dm.open"));
       if (!res) return;
       const name = res.name.trim();
       if (!name) return;
       const { data, error } = await API.sb.from("profiles")
         .select("id,username").ilike("username", name).limit(1);
-      if (error || !data || !data.length) return U.toast("Игрок не найден", "error");
+      if (error || !data || !data.length) return U.toast(t("dm.notFound"), "error");
       location.hash = `#/dm/${data[0].id}`;
     });
 
@@ -257,8 +266,7 @@
       lastSig = sig;
 
       if (!list.length) {
-        box.innerHTML = `<div class="empty">Писем пока нет. Нажмите «+ Написать» или
-          напишите игроку с его профиля.</div>`;
+        box.innerHTML = `<div class="empty">${U.esc(t("dm.empty"))}</div>`;
         return;
       }
       box.innerHTML = list.map(c => {
@@ -267,12 +275,12 @@
         nameCache[c.partner] = pname;
         const out = c.last.sender_id === me.id;
         return `<div class="list-item">
-          <a href="#/profile/${c.partner}" title="Профиль ${U.esc(pname)}"><span class="avatar">${U.esc((pname || "?")[0].toUpperCase())}</span></a>
+          <a href="#/profile/${c.partner}" title="${U.esc(t("dm.profileTitle", { name: pname }))}"><span class="avatar">${U.esc((pname || "?")[0].toUpperCase())}</span></a>
           <div style="flex:1;min-width:0">
             <a href="#/dm/${c.partner}" style="font-weight:700">${U.esc(pname)}</a>
-            <a class="muted small" href="#/profile/${c.partner}" title="Профиль"> · профиль</a>
+            <a class="muted small" href="#/profile/${c.partner}" title="${U.esc(t("dm.profileTitle", { name: pname }))}">${U.esc(t("dm.profileLink"))}</a>
             <div class="muted small" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
-              ${out ? "<b>Вы:</b> " : ""}${U.esc(c.last.body)}</div>
+              ${out ? `<b>${U.esc(t("chat.youPrefix"))}</b> ` : ""}${U.esc(c.last.body)}</div>
           </div>
           <div style="text-align:right">
             <div class="muted small">${U.fmtDate(c.last.created_at)}</div>
@@ -300,33 +308,29 @@
     return function () { if (stopPoll) stopPoll(); if (stopVisible) stopVisible(); API.unsubscribe(chan); };
   };
 
-  const notAuthBox = (text) => `
-    <div class="empty">${text || "Только для авторизованных"} ·
-      <a href="#/login">войти</a> / <a href="#/signup">регистрация</a></div>`;
-
   // Conversation thread
   const ThreadPage_render = async function (container, partnerId) {
     const me = App.user || await API.user();
     if (!me) {
-      container.innerHTML = `<div class="card">${notAuthBox("Чтобы переписываться")}</div>`;
+      container.innerHTML = `<div class="card">${notAuthBox(t("dm.authHint"))}</div>`;
       return () => {};
     }
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const { data: p } = await API.sb.from("profiles")
       .select("id,username,rating,last_seen_at,is_banned").eq("id", partnerId).maybeSingle();
-    if (!p) { container.innerHTML = `<div class="card center">Игрок не найден</div>`; return () => {}; }
+    if (!p) { container.innerHTML = `<div class="card center">${U.esc(t("dm.notFound"))}</div>`; return () => {}; }
     nameCache[p.id] = p.username;
 
     container.innerHTML = `
-      <p><a href="#/dm">← Все сообщения</a></p>
+      <p><a href="#/dm">${U.esc(t("dm.back"))}</a></p>
       <div class="card">
         <div class="row">
           <span class="avatar big">${U.esc((p.username || "?")[0].toUpperCase())}</span>
           <div>
             <h2 style="margin:0"><a href="#/profile/${p.id}">${U.esc(p.username)}</a>
-              ${p.is_banned ? '<span class="badge danger">заблокирован</span>' : ""}
-              <span class="online-dot ${Pages.isOnline(p) ? "" : "off"}" title="онлайн"></span></h2>
-            <span class="muted small">Рейтинг: ${p.rating}</span>
+              ${p.is_banned ? `<span class="badge danger">${U.esc(t("profile.bannedBadge"))}</span>` : ""}
+              <span class="online-dot ${Pages.isOnline(p) ? "" : "off"}" title="${U.esc(t("status.online"))}"></span></h2>
+            <span class="muted small">${U.esc(t("dm.rating", { rating: p.rating }))}</span>
           </div>
         </div>
       </div>
@@ -334,7 +338,7 @@
         <div class="chat-box tall">
           <div class="chat-log" id="dm-log"></div>
           <div class="chat-input">
-            <input id="dm-text" maxlength="2000" placeholder="Личное сообщение…">
+            <input id="dm-text" maxlength="2000" placeholder="${U.esc(t("dm.placeholder"))}">
             <button class="btn primary" id="dm-send">→</button>
           </div>
         </div>
@@ -359,7 +363,7 @@
       seen.add(m.id);
       const mine = m.sender_id === me.id;
       const who = mine
-        ? `<a class="user-link" href="#/profile/${me.id}">Вы:</a>`
+        ? `<a class="user-link" href="#/profile/${me.id}">${U.esc(t("chat.youPrefix"))}</a>`
         : `<a class="user-link" href="#/profile/${p.id}">${U.esc(p.username)}:</a>`;
       const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}">
         ${who} ${U.linkify(m.body)}
@@ -373,17 +377,17 @@
       .or(`and(sender_id.eq.${me.id},recipient_id.eq.${p.id}),and(sender_id.eq.${p.id},recipient_id.eq.${me.id})`)
       .order("created_at").limit(300);
     (msgs || []).forEach(addMsg);
-    if (!msgs || !msgs.length) log.innerHTML = `<div class="empty">Начните переписку!</div>`;
+    if (!msgs || !msgs.length) log.innerHTML = `<div class="empty">${U.esc(t("dm.startChat"))}</div>`;
     await API.markDmsRead(p.id);
 
     const send = async () => {
-      const t = U.qs("#dm-text");
-      const body = t.value.trim();
+      const inpEl = U.qs("#dm-text");
+      const body = inpEl.value.trim();
       if (!body) return;
-      t.value = "";
+      inpEl.value = "";
       log.querySelector(".empty") && log.querySelector(".empty").remove();
       // optimistic: show instantly, RPC in the background
-      const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">Вы:</a> ${U.linkify(body)}
+      const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(t("chat.youPrefix"))}</a> ${U.linkify(body)}
         <span class="muted tiny">${U.fmtDate(new Date().toISOString())}</span></div>`);
       log.appendChild(tmp);
       log.scrollTop = log.scrollHeight;
@@ -395,7 +399,7 @@
         const i = pending.indexOf(pend);
         if (i >= 0) pending.splice(i, 1);
         U.toast(error.message, "error");
-        t.value = body;
+        inpEl.value = body;
         return;
       }
       if (res && res.message) seen.add(res.message.id); // no duplicates later

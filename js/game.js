@@ -4,26 +4,31 @@
   "use strict";
 
   const CFG = window.SITE_CONFIG;
+  const t = (key, params) => I18n.t(key, params);
   const REASONS = {
-    checkmate: "Мат",
-    resign: "Соперник сдался",
-    timeout: "Время вышло",
-    fraud: "Ложное заявление о флаге",
-    abandonment: "Соперник покинул партию",
-    agreement: "Ничья по соглашению",
-    stalemate: "Пат",
-    insufficient_material: "Недостаток материала",
-    fifty_moves: "Правило 50 ходов",
-    repetition: "Троекратное повторение",
-    forfeit: "Соперник заблокирован",
-    cheat: "Соперник систематически отправлял нелегальные ходы",
-    abort: "Партия отменена — рейтинг не изменился"
+    checkmate: "reason.checkmate",
+    resign: "reason.resign",
+    timeout: "reason.timeout",
+    fraud: "reason.fraud",
+    abandonment: "reason.abandonment",
+    agreement: "reason.agreement",
+    stalemate: "reason.stalemate",
+    insufficient_material: "reason.insufficient_material",
+    fifty_moves: "reason.fifty_moves",
+    repetition: "reason.repetition",
+    forfeit: "reason.forfeit",
+    cheat: "reason.cheat",
+    abort: "reason.abort"
   };
+  const reasonText = (r) => REASONS[r] ? t(REASONS[r]) : "";
+  const tcKey = (c) => ["bullet", "blitz", "rapid", "classic"].includes(c) ? c : null;
 
   // Local legal-move generation with the vendored chess.js 1.4.0.
   // The server remains the source of truth: it validates submitted moves
   // and decides the result. The move list only feeds the UI
   // (highlights and premoves) and is never fetched from the server.
+  // Premoves are validated here too: an illegal staged move is cancelled
+  // on the client and never reaches the server.
   function computeLegal(g) {
     if (!g || g.status !== "active" || !window.Chess) return [];
     try {
@@ -42,7 +47,7 @@
       chans: [], pendingMove: false, flagClaimed: false, destroyed: false,
       stm: "w", oppDeadline: null, chatEl: null,
       chatInit: false, chatSub: false, gameSub: false,
-      replay: null, replayPly: null, keyHandler: null,
+      replay: null, replayPly: null, keyHandler: null, autoTimer: null,
       premove: null,           // { from, to, promo } staged move (square names)
       flagRetryAt: null,       // retry delay for a flag claim after not_out
       chatSeen: new Set(), lastChatTs: null,
@@ -51,7 +56,7 @@
       stopVisible: null
     };
 
-    container.innerHTML = `<div class="card center"><span class="spinner"></span> Загрузка партии…</div>`;
+    container.innerHTML = `<div class="card center"><span class="spinner"></span> ${U.esc(t("game.loading"))}</div>`;
 
     // state application
     function derive(g) {
@@ -134,9 +139,13 @@
       }
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       if (!myTurn) return;
-      // the premove is sent immediately with no local legality check;
-      // the server is the final judge and rejects illegal moves, after
-      // which the board redraws from the database state.
+      // client-side validation: if the staged move is illegal in the
+      // position after the opponent's move, the premove is cancelled and
+      // nothing is sent to the server
+      if (!S.legal.includes(p.from + p.to + (p.promo || ""))) {
+        clearPremoveState();   // redraw so the stale note disappears too
+        return;
+      }
       clearPremoveState(false);           // clear the highlight early
       onMove(p.from, p.to, p.promo, { isPremove: true });
     }
@@ -163,18 +172,18 @@
       <div>
         <div class="card" id="status-card"></div>
         <div class="card">
-          <h3 class="spread row">Ходы <button class="btn ghost small" id="flip">⇅ Развернуть</button></h3>
+          <h3 class="spread row">${U.esc(t("game.moves"))} <button class="btn ghost small" id="flip">${U.esc(t("game.flip"))}</button></h3>
           <div class="moves-list" id="moves"></div>
           <div class="replay-bar" id="replaybar" style="display:none"></div>
           <div class="game-actions" id="actions"></div>
           <div id="drawbox"></div>
         </div>
         <div class="card" id="chat-card" style="display:none">
-          <h3>Чат партии</h3>
+          <h3>${U.esc(t("game.chat"))}</h3>
           <div class="chat-box">
             <div class="chat-log" id="chat-log"></div>
             <div class="chat-input">
-              <input id="chat-text" maxlength="500" placeholder="Сообщение…">
+              <input id="chat-text" maxlength="500" placeholder="${U.esc(t("chat.placeholder"))}">
               <button class="btn primary" id="chat-send">→</button>
             </div>
           </div>
@@ -204,7 +213,7 @@
       const g = S.g;
       const pid = color === "white" ? g.white : g.black;
       const box = U.qs(elId, root);
-      if (!pid) { box.innerHTML = `<span class="muted">Ожидание игрока…</span>`; return; }
+      if (!pid) { box.innerHTML = `<span class="muted">${U.esc(t("game.waitingPlayer"))}</span>`; return; }
       const name = pid === (myProfile && myProfile.id) ? (myProfile.username) : (S.names && S.names[pid]) || "…";
       const rating = pid === (myProfile && myProfile.id) ? myProfile.rating : (S.names && S.names[pid] !== undefined ? S.ratings[pid] : "");
       const turn = g.status === "active" && ((S.stm === "w") === (color === "white"));
@@ -213,7 +222,7 @@
       const gone = ms <= 0;
       box.innerHTML = `
         <span class="avatar">${U.esc((name || "?")[0].toUpperCase())}</span>
-        <span class="who"><a href="#/profile/${pid}">${U.esc(name || "Игрок")}</a>
+        <span class="who"><a href="#/profile/${pid}">${U.esc(name || t("game.player"))}</a>
           <span class="muted small">${rating ? "(" + rating + ")" : ""}</span></span>
         <span class="clock ${turn ? "active" : ""} ${low ? "low" : ""} ${gone ? "gone" : ""}"
               data-clock="${color}">${U.fmtClock(ms)}</span>`;
@@ -241,7 +250,7 @@
       }
       U.qs("#moves", root).innerHTML = rows.length
         ? `<table>${rows.join("")}</table>`
-        : `<div class="empty">Партия только началась</div>`;
+        : `<div class="empty">${U.esc(t("game.movesEmpty"))}</div>`;
       if (S.replay) {
         U.qsa("#moves td[data-ply]", root).forEach(td =>
           td.addEventListener("click", () => seekReplay(Number(td.dataset.ply))));
@@ -281,16 +290,18 @@
       const bar = U.qs("#replaybar", root);
       bar.style.display = "";
       bar.innerHTML = `
-        <button class="btn ghost small" data-rp="first" title="В начало">|&#9664;</button>
-        <button class="btn ghost small" data-rp="prev" title="Назад">&#9664;</button>
-        <button class="btn ghost small" data-rp="next" title="Вперёд">&#9654;</button>
-        <button class="btn ghost small" data-rp="last" title="В конец">&#9654;|</button>
+        <button class="btn ghost small" data-rp="first" title="${U.esc(t("rp.first"))}">|&#9664;</button>
+        <button class="btn ghost small" data-rp="prev" title="${U.esc(t("rp.prev"))}">&#9664;</button>
+        <button class="btn ghost small replay-autoplay" data-rp="play" title="${U.esc(t("rp.autoTitle"))}">&#9654; ${U.esc(t("game.auto"))}</button>
+        <button class="btn ghost small" data-rp="next" title="${U.esc(t("rp.next"))}">&#9654;</button>
+        <button class="btn ghost small" data-rp="last" title="${U.esc(t("rp.last"))}">&#9654;|</button>
         <span class="muted small" id="replay-pos"></span>
-        <span class="muted small">· стрелки ← → перематывают</span>`;
+        <span class="muted small">${U.esc(t("rp.hint"))}</span>`;
       U.qsa("button[data-rp]", bar).forEach(b => b.addEventListener("click", () => {
         const a = b.dataset.rp;
         if (a === "first") seekReplay(0);
         else if (a === "prev") seekReplay(S.replayPly - 1);
+        else if (a === "play") toggleAutoplay();
         else if (a === "next") seekReplay(S.replayPly + 1);
         else if (a === "last") seekReplay((S.replay.fens || []).length);
       }));
@@ -302,12 +313,33 @@
       };
       document.addEventListener("keydown", S.keyHandler);
     }
+    // autoplay, the same as the leaderboard replay: steps forward every
+    // 750 ms, restarts from the start position when already at the end,
+    // and stops on any manual navigation
+    function stopAutoplay() {
+      if (S.autoTimer) { clearInterval(S.autoTimer); S.autoTimer = null; }
+      const btn = U.qs('[data-rp="play"]', root);
+      if (btn) { btn.innerHTML = U.esc(t("game.auto")); btn.title = t("rp.autoTitle"); }
+    }
+    function toggleAutoplay() {
+      if (S.autoTimer) { stopAutoplay(); return; }
+      const total = (S.replay.fens || []).length;
+      if (S.replayPly >= total) S.replayPly = 0;
+      const btn = U.qs('[data-rp="play"]', root);
+      if (btn) { btn.innerHTML = U.esc(t("game.pause")); btn.title = t("rp.stopTitle"); }
+      seekReplay(S.replayPly, true); // show the start position immediately when ply=0
+      S.autoTimer = setInterval(() => {
+        if (S.replayPly >= total) { stopAutoplay(); return; }
+        seekReplay(S.replayPly + 1, true); // keep the timer running
+      }, 750);
+    }
     function updateReplayPos() {
       const el = U.qs("#replay-pos", root);
       if (el) el.textContent = `${S.replayPly} / ${(S.replay.fens || []).length}`;
     }
-    function seekReplay(ply) {
+    function seekReplay(ply, keepAuto) {
       if (!S.replay) return;
+      if (!keepAuto) stopAutoplay(); // any manual navigation stops the autoplay
       const total = (S.replay.fens || []).length;
       S.replayPly = Math.max(0, Math.min(total, ply));
       if (S.replayPly === total) {
@@ -366,18 +398,19 @@
       if (g.status === "waiting") {
         const isHost = me && (g.white === me.id || g.black === me.id);
         const link = `${location.origin}${location.pathname}#/game/${g.id}`;
+        const kind = g.rated ? t("lobby.rated").toLowerCase() : t("challenge.casual").toLowerCase();
         c.innerHTML = `
-          <div class="result-banner waiting">Ожидание соперника</div>
-          <p class="small muted">Контроль: ${U.fmtTc(g.initial_ms, g.increment_ms)},
-            ${g.rated ? "рейтинговая" : "товарищеская"}</p>
+          <div class="result-banner waiting">${U.esc(t("game.waitingOpponent"))}</div>
+          <p class="small muted">${U.esc(t("game.control",
+            { tc: U.fmtTc(g.initial_ms, g.increment_ms), kind }))}</p>
           ${isHost ? `
-            <label>Ссылка-приглашение</label>
+            <label>${U.esc(t("game.inviteLink"))}</label>
             <div class="row"><input readonly id="inv-link" value="${U.esc(link)}">
-            <button class="btn" id="copy-inv">Копировать</button></div>
-            <div class="game-actions"><button class="btn danger" id="cancel-wait">Отменить вызов</button></div>` : ""}
-          ${!me ? `<p>Войдите, чтобы присоединиться к партии.</p>`
+            <button class="btn" id="copy-inv">${U.esc(t("game.copy"))}</button></div>
+            <div class="game-actions"><button class="btn danger" id="cancel-wait">${U.esc(t("game.cancelChallenge"))}</button></div>` : ""}
+          ${!me ? `<p>${U.esc(t("game.loginToJoin"))}</p>`
                 : (!S.myColor ? `<div class="game-actions">
-                    <button class="btn primary big" id="join-btn">♟ Присоединиться к партии</button>
+                    <button class="btn primary big" id="join-btn">${U.esc(t("game.join"))}</button>
                   </div>` : "")}`;
         const joinBtn = U.qs("#join-btn", c);
         if (joinBtn) joinBtn.addEventListener("click", async () => {
@@ -389,10 +422,10 @@
         if (isHost) {
           U.qs("#copy-inv", c).addEventListener("click", () => {
             navigator.clipboard && navigator.clipboard.writeText(link);
-            U.toast("Ссылка скопирована", "good");
+            U.toast(t("game.linkCopied"), "good");
           });
           U.qs("#cancel-wait", c).addEventListener("click", async () => {
-            if (!(await U.confirmModal("Отменить вызов?", "Партия будет удалена.", "Отменить"))) return;
+            if (!(await U.confirmModal(t("game.cancelChallengeQ"), t("game.cancelChallengeText"), t("common.cancel")))) return;
             const { error } = await API.cancelWaiting(g.id);
             if (error) U.toast(error.message, "error"); else location.hash = "#/";
           });
@@ -400,46 +433,46 @@
         return;
       }
       if (g.status === "aborted") {
-        c.innerHTML = `<div class="result-banner draw">Партия прервана</div>
-          <p class="small muted center">${REASONS[g.reason] || ""}</p>`;
+        c.innerHTML = `<div class="result-banner draw">${U.esc(t("game.aborted"))}</div>
+          <p class="small muted center">${U.esc(reasonText(g.reason))}</p>`;
         return;
       }
       if (g.status === "finished") {
-        let cls = "draw", txt = "Ничья";
+        let cls = "draw", txt = t("game.draw");
         if (me && g.winner) {
-          if (g.winner === me.id) { cls = "win"; txt = "Победа!"; }
-          else { cls = "lose"; txt = "Поражение"; }
-        } else if (g.result === "1-0") txt = "1–0 · победа белых";
-        else if (g.result === "0-1") txt = "0–1 · победа чёрных";
+          if (g.winner === me.id) { cls = "win"; txt = t("game.win"); }
+          else { cls = "lose"; txt = t("game.lose"); }
+        } else if (g.result === "1-0") txt = t("game.whiteWins");
+        else if (g.result === "0-1") txt = t("game.blackWins");
         else txt = "½–½";
         const rd = g.rating_delta || null;
         // the pool rating delta takes precedence over the global one
         const myDelta = rd && me ? (g.white === me.id ? rd.white : rd.black) : null;
         const myDeltaClass = rd && me ? (g.white === me.id ? rd.white_class : rd.black_class) : null;
         const shownDelta = myDeltaClass != null ? myDeltaClass : myDelta;
-        const poolName = rd && rd.class === "bullet" ? "пуля" : rd && rd.class === "blitz" ? "блиц"
-                       : rd && rd.class === "rapid" ? "быстрые"
-                       : rd && rd.class === "classic" ? "классика" : "";
+        const poolName = rd && tcKey(rd.class) ? " (" + t("tc." + rd.class) + ")" : "";
         c.innerHTML = `
-          <div class="result-banner ${cls}">${txt}</div>
-          <p class="small muted center">${U.esc(REASONS[g.reason] || "")}
+          <div class="result-banner ${cls}">${U.esc(txt)}</div>
+          <p class="small muted center">${U.esc(reasonText(g.reason))}
           ${g.rated && shownDelta != null && shownDelta !== 0 ?
-            ` · Рейтинг${poolName ? " (" + poolName + ")" : ""}: <b>${shownDelta > 0 ? "+" : ""}${shownDelta}</b>` : ""}</p>
+            ` · ${t("game.ratingDelta",
+                { pool: poolName, delta: shownDelta > 0 ? "+" + shownDelta : String(shownDelta) })}` : ""}</p>
           ${me && g.winner && g.winner !== me.id && g.reason === "fraud" ?
-            `<p class="small center good">Соперник заблокирован навсегда за попытку обмана.</p>` : ""}`;
+            `<p class="small center good">${U.esc(t("game.oppBannedFraud"))}</p>` : ""}`;
         return;
       }
       // active game
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       const prenote = S.premove
-        ? `<div class="draw-box premove-box"><span>Премув: <b>${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}</b> — сыграет после хода соперника · отмена — ПКМ по доске</span>
-           <button class="btn ghost small" id="pm-cancel">Отменить</button></div>`
+        ? `<div class="draw-box premove-box"><span>${t("game.premoveNote",
+            { move: `${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}` })}
+           <button class="btn ghost small" id="pm-cancel">${U.esc(t("common.cancel"))}</button></div>`
         : "";
       c.innerHTML = `<div class="center">
-        ${S.pendingMove ? `<span class="spinner"></span> Ход отправляется…` :
-          myTurn ? `<b>Ваш ход</b>` :
-          S.myColor ? `<span class="muted">Ход соперника — можно зарядить премув</span>` :
-          `<span class="muted">Просмотр партии</span>`}
+        ${S.pendingMove ? `<span class="spinner"></span> ${U.esc(t("game.sending"))}` :
+          myTurn ? `<b>${U.esc(t("game.yourMove"))}</b>` :
+          S.myColor ? `<span class="muted">${U.esc(t("game.oppTurn"))}</span>` :
+          `<span class="muted">${U.esc(t("game.spectating"))}</span>`}
       </div>${prenote}`;
       const pmc = U.qs("#pm-cancel", c);
       if (pmc) pmc.addEventListener("click", () => { setPremoveState(null); });
@@ -459,15 +492,15 @@
       const hasMoves = (g.moves || []).length >= 1;
       const canAbort = (g.moves || []).length < 2;
       box.innerHTML = `
-        <button class="btn" id="act-draw">½ Ничья</button>
-        <button class="btn ${(!hasMoves || oppTb || myTb) ? "hidden" : ""}" id="act-takeback">↩ Взять ход</button>
-        <button class="btn" id="act-resign">⚑ Сдаться</button>
-        ${canAbort ? `<button class="btn" id="act-abort" title="Отмена без изменения рейтинга">✖ Отменить партию</button>` : ""}
-        <button class="btn danger hidden" id="act-flag">🏳 Флаг!</button>`;
+        <button class="btn" id="act-draw">${U.esc(t("game.actDraw"))}</button>
+        <button class="btn ${(!hasMoves || oppTb || myTb) ? "hidden" : ""}" id="act-takeback">${U.esc(t("game.actTakeback"))}</button>
+        <button class="btn" id="act-resign">${U.esc(t("game.actResign"))}</button>
+        ${canAbort ? `<button class="btn" id="act-abort" title="${U.esc(t("game.actAbortTitle"))}">${U.esc(t("game.actAbort"))}</button>` : ""}
+        <button class="btn danger hidden" id="act-flag">${U.esc(t("game.actFlag"))}</button>`;
       if (oppOffer) {
-        db.innerHTML = `<div class="draw-box"><span>Соперник предлагает ничью</span>
-          <button class="btn primary small" id="d-accept">Принять</button>
-          <button class="btn ghost small" id="d-decline">Отклонить</button></div>`;
+        db.innerHTML = `<div class="draw-box"><span>${U.esc(t("game.oppOffersDraw"))}</span>
+          <button class="btn primary small" id="d-accept">${U.esc(t("common.accept"))}</button>
+          <button class="btn ghost small" id="d-decline">${U.esc(t("common.decline"))}</button></div>`;
         U.qs("#d-accept", db).addEventListener("click", () => act(() => API.acceptDraw(S.g.id)));
         U.qs("#d-decline", db).addEventListener("click", () => act(() => API.declineDraw(S.g.id)));
       }
@@ -475,19 +508,19 @@
         // my pending draw offer is shown like a premove: it stays on the
         // board until the opponent answers, and I may cancel it anytime
         db.insertAdjacentHTML("beforeend", `<div class="draw-box premove-box">
-          <span>Ничья предложена — сыграет, когда соперник согласится</span>
-          <button class="btn ghost small" id="d-cancel">Отменить</button></div>`);
+          <span>${U.esc(t("game.myDrawOffer"))}</span>
+          <button class="btn ghost small" id="d-cancel">${U.esc(t("common.cancel"))}</button></div>`);
         U.qs("#d-cancel", db).addEventListener("click", () => act(() => API.declineDraw(S.g.id)));
       }
       if (oppTb) {
-        db.insertAdjacentHTML("beforeend", `<div class="draw-box"><span>Соперник просит взять ход назад</span>
-          <button class="btn primary small" id="tb-accept">Принять</button>
-          <button class="btn ghost small" id="tb-decline">Отклонить</button></div>`);
+        db.insertAdjacentHTML("beforeend", `<div class="draw-box"><span>${U.esc(t("game.oppTakeback"))}</span>
+          <button class="btn primary small" id="tb-accept">${U.esc(t("common.accept"))}</button>
+          <button class="btn ghost small" id="tb-decline">${U.esc(t("common.decline"))}</button></div>`);
         U.qs("#tb-accept", db).addEventListener("click", () => act(() => API.acceptTakeback(S.g.id)));
         U.qs("#tb-decline", db).addEventListener("click", () => act(() => API.declineTakeback(S.g.id)));
       } else if (myTb) {
-        db.insertAdjacentHTML("beforeend", `<div class="draw-box"><span>Вы просите откат хода — ждём ответа соперника.</span>
-          <button class="btn ghost small" id="tb-cancel">Отменить</button></div>`);
+        db.insertAdjacentHTML("beforeend", `<div class="draw-box"><span>${U.esc(t("game.myTakeback"))}</span>
+          <button class="btn ghost small" id="tb-cancel">${U.esc(t("common.cancel"))}</button></div>`);
         U.qs("#tb-cancel", db).addEventListener("click", () => act(() => API.declineTakeback(S.g.id)));
       }
       U.qs("#act-draw", box).addEventListener("click", () => act(() => API.offerDraw(S.g.id)));
@@ -495,13 +528,11 @@
       if (tbBtn) tbBtn.addEventListener("click", () => act(() => API.requestTakeback(S.g.id)));
       const abortBtn = U.qs("#act-abort", box);
       if (abortBtn) abortBtn.addEventListener("click", async () => {
-        if (!(await U.confirmModal("Отменить партию?",
-            "Партия прервётся без изменения рейтинга. Доступно, пока оба игрока не сделали по одному ходу.",
-            "Отменить партию"))) return;
+        if (!(await U.confirmModal(t("game.abortQ"), t("game.abortText"), t("game.actAbort")))) return;
         act(() => API.abortGame(S.g.id));
       });
       U.qs("#act-resign", box).addEventListener("click", async () => {
-        if (await U.confirmModal("Сдаться?", "Партия будет проиграна.", "Сдаться")) act(() => API.resign(S.g.id));
+        if (await U.confirmModal(t("game.resignQ"), t("game.resignText"), t("game.actResign"))) act(() => API.resign(S.g.id));
       });
       U.qs("#act-flag", box).addEventListener("click", () => doClaimFlag(true));
       bindRematch();
@@ -511,7 +542,7 @@
       const g = S.g;
       if (!me || !g.winner || g.status !== "finished") return "";
       const opp = g.white === me.id ? g.black : g.white;
-      return `<button class="btn primary" id="act-rematch">↻ Новая партия с ${U.esc((S.names && S.names[opp]) || "соперником")}</button>`;
+      return `<button class="btn primary" id="act-rematch">↻ ${U.esc(t("game.rematch", { name: (S.names && S.names[opp]) || t("game.player").toLowerCase() }))}</button>`;
     }
     function bindRematch() {
       const b = U.qs("#act-rematch", root);
@@ -571,16 +602,16 @@
     async function onMove(from, to, promo, opts) {
       if (S.pendingMove) return;
       const uci = from + to + (promo || "");
-      const isPremove = !!(opts && opts.isPremove);
-      // normal move: render instantly when chess.js accepts it; premoves skip checks entirely
-      if (!isPremove && !S.legal.includes(uci)) return;
+      // every outgoing move (normal or premove) must be legal locally:
+      // the server never receives an illegal move
+      if (!S.legal.includes(uci)) return;
       S.pendingMove = true;
       const local = applyLocalMove(uci);   // instant render
       if (!local) drawStatus();            // nothing rendered locally: show "sending"
       const { data, error } = await API.makeMove(S.g.id, uci);
       S.pendingMove = false;
       if (error || (data && data.ok === false)) {
-        const msg = (error && error.message) || (data && data.error) || "Ход отклонён сервером";
+        const msg = I18n.s((error && error.message) || (data && data.error)) || t("game.moveRejected");
         U.toast(msg, "error");
         await refetch();                   // roll back to the server state
         return;
@@ -705,7 +736,7 @@
       if (!body) return;
       inp.value = "";
       // optimistic: the message appears instantly, the RPC runs in the background
-      const nm = (myProfile && myProfile.username) || "Вы";
+      const nm = (myProfile && myProfile.username) || t("chat.you");
       const tmp = U.el(`<div class="chat-msg"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.esc(body)}</div>`);
       chatLog.appendChild(tmp);
       chatLog.scrollTop = chatLog.scrollHeight;
@@ -778,8 +809,8 @@
     // startup
     const { data, error } = await API.gameState(gameId);
     if (error || !data || !data.ok) {
-      container.innerHTML = `<div class="card center"><h2>Партия не найдена</h2>
-        <p><a href="#/">← Вернуться в лобби</a></p></div>`;
+      container.innerHTML = `<div class="card center"><h2>${U.esc(t("game.notFound"))}</h2>
+        <p><a href="#/">${U.esc(t("game.backToLobby"))}</a></p></div>`;
       return () => {};
     }
     await applyState(data.game, false);
@@ -791,6 +822,7 @@
 
     return function cleanup() {
       S.destroyed = true;
+      stopAutoplay();
       clearInterval(ticker);
       pollTimer();
       chatPollTimer();

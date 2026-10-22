@@ -15,11 +15,11 @@
       this.root.innerHTML = `
         <div class="replay-board"><div class="board-slot"></div></div>
         <div class="replay-bar">
-          <button class="btn ghost small" data-rp="first" title="В начало">|&#9664;</button>
-          <button class="btn ghost small" data-rp="prev" title="Назад">&#9664;</button>
-          <button class="btn ghost small replay-autoplay" data-rp="play" title="Автопрокрутка — партия играет сама">&#9654; Авто</button>
-          <button class="btn ghost small" data-rp="next" title="Вперёд">&#9654;</button>
-          <button class="btn ghost small" data-rp="last" title="В конец">&#9654;|</button>
+          <button class="btn ghost small" data-rp="first" title="${U.esc(I18n.t("rp.first"))}">|&#9664;</button>
+          <button class="btn ghost small" data-rp="prev" title="${U.esc(I18n.t("rp.prev"))}">&#9664;</button>
+          <button class="btn ghost small replay-autoplay" data-rp="play" title="${U.esc(I18n.t("rp.autoTitle"))}">${U.esc(I18n.t("game.auto"))}</button>
+          <button class="btn ghost small" data-rp="next" title="${U.esc(I18n.t("rp.next"))}">&#9654;</button>
+          <button class="btn ghost small" data-rp="last" title="${U.esc(I18n.t("rp.last"))}">&#9654;|</button>
           <span class="muted small" data-rp="pos"></span>
         </div>
         <div class="moves-list rp-moves"><table></table></div>`;
@@ -52,7 +52,7 @@
         </tr>`);
       }
       const tbl = U.qs(".rp-moves table", this.root);
-      tbl.innerHTML = rows.join("") || `<tr><td class="muted">Ходов нет</td></tr>`;
+      tbl.innerHTML = rows.join("") || `<tr><td class="muted">${U.esc(I18n.t("rp.noMoves"))}</td></tr>`;
       U.qsa("a[data-ply]", tbl).forEach(a =>
         a.addEventListener("click", () => this.goto(Number(a.dataset.ply))));
 
@@ -85,7 +85,7 @@
       if (this._timer) { this.stopPlay(); return; }
       if (this.ply >= this.total) this.ply = 0;
       const btn = U.qs('[data-rp="play"]', this.root);
-      if (btn) { btn.innerHTML = "&#9646;&#9646; Пауза"; btn.title = "Остановить автопрокрутку"; }
+      if (btn) { btn.innerHTML = U.esc(I18n.t("game.pause")); btn.title = I18n.t("rp.stopTitle"); }
       this.render(); // show the start position immediately when ply=0
       this._timer = setInterval(() => {
         if (this.ply >= this.total) { this.stopPlay(); return; }
@@ -95,7 +95,7 @@
     stopPlay() {
       if (this._timer) { clearInterval(this._timer); this._timer = null; }
       const btn = U.qs('[data-rp="play"]', this.root);
-      if (btn) { btn.innerHTML = "&#9654; Авто"; btn.title = "Автопрокрутка — партия играет сама"; }
+      if (btn) { btn.innerHTML = U.esc(I18n.t("game.auto")); btn.title = I18n.t("rp.autoTitle"); }
     }
 
     render() {

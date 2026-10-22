@@ -1,8 +1,12 @@
 // Router and shell: navbar, session, ban banner. Pages render instantly
 // before any network call; session and server time arrive in the
 // background. Active menu highlighting is synchronous per navigation.
+// Localization loads first: the language comes from the browser settings
+// (ru/zh dictionaries, English elsewhere).
 (function () {
   "use strict";
+
+  const t = (key, params) => I18n.t(key, params);
 
   // Theme: applied instantly by the inline head script, so here is only
   // the toggle and persistence.
@@ -47,7 +51,7 @@
               ${U.esc((this.profile.username || "?")[0].toUpperCase())}</span>
             ${U.esc(this.profile.username)} <b>${this.profile.rating}</b>
           </a>
-          <a href="#" id="logout">Выйти</a>`;
+          <a href="#" id="logout">${U.esc(t("nav.logout"))}</a>`;
           U.qs("#logout").addEventListener("click", async (e) => {
             e.preventDefault();
             await API.signOut();
@@ -55,14 +59,15 @@
           });
         }
         if (this.profile.is_banned) {
-          ban.textContent = `Аккаунт заблокирован навсегда: ${this.profile.ban_reason || "нарушение правил"}. Играть и писать нельзя.`;
+          ban.textContent = t("ban.banner",
+            { reason: this.profile.ban_reason || t("ban.noReason") });
           ban.classList.remove("hidden");
         } else ban.classList.add("hidden");
       } else {
         if (box.dataset.sig !== "guest") {
           box.dataset.sig = "guest";
-          box.innerHTML = `<a class="nav-login" href="#/login">Войти</a>
-            <a class="btn primary nav-signup" href="#/signup">Регистрация</a>`;
+          box.innerHTML = `<a class="nav-login" href="#/login">${U.esc(t("nav.login"))}</a>
+            <a class="btn primary nav-signup" href="#/signup">${U.esc(t("nav.signup"))}</a>`;
         }
         ban.classList.add("hidden");
       }
@@ -134,10 +139,10 @@
         else if (page === "blog") await wrap(Community.blogPost, arg);
         else if (page === "dm" && !arg) await wrap(Social.messages);
         else if (page === "dm") await wrap(Social.thread, arg);
-        else app.innerHTML = `<div class="card center"><h2>404</h2><p><a href="#/">На главную</a></p></div>`;
+        else app.innerHTML = `<div class="card center"><h2>404</h2><p><a href="#/">${U.esc(t("common.home"))}</a></p></div>`;
       } catch (e) {
         console.error(e);
-        app.innerHTML = `<div class="card center"><h2>Ошибка</h2><p class="muted">${U.esc(e.message || e)}</p></div>`;
+        app.innerHTML = `<div class="card center"><h2>${U.esc(t("common.error"))}</h2><p class="muted">${U.esc(e.message || e)}</p></div>`;
       }
       this.refreshDmBadge();
       window.scrollTo(0, 0);
@@ -157,6 +162,9 @@
   }
 
   (async function init() {
+    // language first: the dictionaries and the static shell localize
+    // before the first render
+    await I18n.init();
     // theme is applied before first render; only the button lives here
     applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
     const tbtn = U.qs("#theme-toggle");
@@ -174,7 +182,7 @@
     // if the instant render was a guest view but a session exists, rerender once
     if (App.user && (location.hash === "" || location.hash === "#/")) App.route();
     if (viaEmailLink && App.user) {
-      U.toast("Email подтверждён — вы вошли автоматически", "good");
+      U.toast(I18n.t("auth.emailConfirmed"), "good");
       try { history.replaceState(null, "", location.pathname + location.search + "#/"); } catch (e) {}
     }
     // unread DM badge refreshes periodically and idles in the background

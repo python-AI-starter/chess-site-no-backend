@@ -3,84 +3,87 @@
 (function () {
   "use strict";
 
+  const t = (key, params) => I18n.t(key, params);
+
   const PRESETS = [
-    { label: "Пуля", name: "1+0", ms: 60000, inc: 0 },
-    { label: "Пуля", name: "2+1", ms: 120000, inc: 1000 },
-    { label: "Блиц", name: "3+0", ms: 180000, inc: 0 },
-    { label: "Блиц", name: "3+2", ms: 180000, inc: 2000 },
-    { label: "Блиц", name: "5+0", ms: 300000, inc: 0 },
-    { label: "Быстрые", name: "10+0", ms: 600000, inc: 0 },
-    { label: "Быстрые", name: "15+10", ms: 900000, inc: 10000 },
-    { label: "Классика", name: "30+0", ms: 1800000, inc: 0 },
-    { label: "Классика", name: "30+20", ms: 1800000, inc: 20000 }
+    { name: "1+0", ms: 60000, inc: 0, pool: "bullet" },
+    { name: "2+1", ms: 120000, inc: 1000, pool: "bullet" },
+    { name: "3+0", ms: 180000, inc: 0, pool: "blitz" },
+    { name: "3+2", ms: 180000, inc: 2000, pool: "blitz" },
+    { name: "5+0", ms: 300000, inc: 0, pool: "blitz" },
+    { name: "10+0", ms: 600000, inc: 0, pool: "rapid" },
+    { name: "15+10", ms: 900000, inc: 10000, pool: "rapid" },
+    { name: "30+0", ms: 1800000, inc: 0, pool: "classic" },
+    { name: "30+20", ms: 1800000, inc: 20000, pool: "classic" }
   ];
 
   const LobbyPage_render = async function (container) {
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const me = await API.user();
+    const myProfile = me
+      ? (App.profile && App.profile.id === me.id ? App.profile : await API.profile(me.id))
+      : null;
 
     container.innerHTML = `
-      <h1>Играть</h1>
+      <h1>${U.esc(t("lobby.title"))}</h1>
       ${!me ? `
         <div class="card center">
-          <h2>Добро пожаловать в «Ладью» &#9820;</h2>
-          <p class="muted">Свободные онлайн-шахматы: валидация ходов прямо в PostgreSQL,
-          рейтинг Эло, общий чат, личные сообщения, форум, клубы и блог.</p>
+          <h2>${U.esc(t("lobby.welcome"))}</h2>
+          <p class="muted">${U.esc(t("lobby.intro"))}</p>
           <div class="row" style="justify-content:center">
-            <a class="btn primary big" href="#/signup">Регистрация</a>
-            <a class="btn big" href="#/login">Вход</a>
+            <a class="btn primary big" href="#/signup">${U.esc(t("nav.signup"))}</a>
+            <a class="btn big" href="#/login">${U.esc(t("nav.login"))}</a>
           </div>
         </div>
         <div class="card">
-          <h2>Открытые вызовы</h2>
-          <p class="muted small">Игроки, которые ищут соперника через «Быструю игру». Войдите, чтобы принять вызов.</p>
+          <h2>${U.esc(t("lobby.openChallenges"))}</h2>
+          <p class="muted small">${U.esc(t("lobby.openGuestHint"))}</p>
           <div id="open-list"><span class="spinner"></span></div>
         </div>` : `
         <div class="card hidden" id="my-games"></div>
         <div class="grid2">
           <div class="card">
-            <h2>Быстрая игра</h2>
-            <p class="muted small">Соперник подберётся автоматически. Цвет — случайный.</p>
+            <h2>${U.esc(t("lobby.quickGame"))}</h2>
+            <p class="muted small">${U.esc(t("lobby.quickHint"))}</p>
             <div class="tc-grid" id="tc-grid">
               ${PRESETS.map(p => `
                 <button class="tc-btn" data-ms="${p.ms}" data-inc="${p.inc}">
-                  <b>${p.name}</b><span>${p.label}</span>
+                  <b>${p.name}</b><span>${U.esc(t("tc." + p.pool))}</span>
                 </button>`).join("")}
             </div>
             <div class="row" style="margin-top:12px">
-              <input id="custom-min" type="number" min="1" max="120" value="5" style="width:80px"> мин
-              <input id="custom-inc" type="number" min="0" max="60" value="0" style="width:80px"> сек
-              <button class="btn" id="custom-go">Подобрать</button>
+              <input id="custom-min" type="number" min="1" max="120" value="5" style="width:80px"> ${U.esc(t("common.min"))}
+              <input id="custom-inc" type="number" min="0" max="60" value="0" style="width:80px"> ${U.esc(t("common.sec"))}
+              <button class="btn" id="custom-go">${U.esc(t("lobby.pair"))}</button>
             </div>
             <div id="seek-status" class="center" style="margin-top:14px"></div>
           </div>
           <div class="card">
-            <h2>Вызов по ссылке</h2>
-            <p class="muted small">Создайте партию и отправьте ссылку другу — он присоединится сюда.</p>
-            <label>Ваш цвет</label>
+            <h2>${U.esc(t("lobby.linkChallenge"))}</h2>
+            <p class="muted small">${U.esc(t("lobby.linkHint"))}</p>
+            <label>${U.esc(t("lobby.yourColor"))}</label>
             <select id="ch-color">
-              <option value="random">Случайный</option>
-              <option value="white">Белые</option>
-              <option value="black">Чёрные</option>
+              <option value="random">${U.esc(t("color.random"))}</option>
+              <option value="white">${U.esc(t("color.white"))}</option>
+              <option value="black">${U.esc(t("color.black"))}</option>
             </select>
-            <label>Контроль времени</label>
+            <label>${U.esc(t("lobby.timeControl"))}</label>
             <div class="row">
-              <input id="ch-min" type="number" min="1" max="120" value="10" style="width:80px"> мин
-              <input id="ch-inc" type="number" min="0" max="60" value="0" style="width:80px"> сек
+              <input id="ch-min" type="number" min="1" max="120" value="10" style="width:80px"> ${U.esc(t("common.min"))}
+              <input id="ch-inc" type="number" min="0" max="60" value="0" style="width:80px"> ${U.esc(t("common.sec"))}
             </div>
-            <label><input type="checkbox" id="ch-rated" checked style="width:auto"> Рейтинговая</label>
-            <button class="btn primary block" id="ch-create" style="margin-top:12px">Создать вызов</button>
+            <label><input type="checkbox" id="ch-rated" checked style="width:auto"> ${U.esc(t("lobby.rated"))}</label>
+            <button class="btn primary block" id="ch-create" style="margin-top:12px">${U.esc(t("lobby.create"))}</button>
           </div>
         </div>
         <div class="card">
-          <h2 class="spread row">Открытые вызовы
-            <button class="btn ghost small" id="open-refresh" title="Обновить список">⟳ Обновить</button></h2>
-          <p class="muted small">Все, кто ищет соперника через «Быструю игру»: нажмите «Принять», чтобы начать партию с этим контролем.
-          Вызовы по ссылке в списке не публикуются.</p>
+          <h2 class="spread row">${U.esc(t("lobby.openChallenges"))}
+            <button class="btn ghost small" id="open-refresh" title="${U.esc(t("common.refreshTitle"))}">${U.esc(t("common.refresh"))}</button></h2>
+          <p class="muted small">${U.esc(t("lobby.openHint"))}</p>
           <div id="open-list"><span class="spinner"></span></div>
         </div>`}
       <div class="card">
-        <h2>Общий чат</h2>
+        <h2>${U.esc(t("lobby.globalChat"))}</h2>
         <div id="global-chat"></div>
       </div>
     `;
@@ -91,12 +94,60 @@
     const cleanupFns = [() => { if (!disposed) gcCleanup(); }];
 
     // Open challenges = quick-pairing seeks. They are exactly the players
-    // who searched an opponent through "Быстрая игра": accepting a seek
+    // who searched an opponent through quick pairing: accepting a seek
     // joins the same pool and pairs with its owner at once. Link
     // challenges stay private (joinable only through their link) and
     // direct challenges reach the invitee as a DM, so neither shows here.
+    // Own seeks render optimistically: the row appears the moment the
+    // button is pressed, before the RPC confirms it, and disappears at
+    // once on cancel — from both panels, since they share the state below.
     let openDebounce = null;
     const scheduleOpen = () => { clearTimeout(openDebounce); openDebounce = setTimeout(loadOpen, 250); };
+    let cachedSeeks = [];
+    let optimisticSeek = null; // { initial_ms, increment_ms } until the server confirms
+
+    function renderOpen() {
+      const box = U.qs("#open-list");
+      if (!box) return;
+      let rows = cachedSeeks;
+      if (optimisticSeek && me && !rows.some(s => s.user_id === me.id)) {
+        rows = rows.concat([{ user_id: me.id, initial_ms: optimisticSeek.initial_ms,
+                              increment_ms: optimisticSeek.increment_ms,
+                              p: myProfile, optimistic: true }]);
+      }
+      const trs = rows.map(s => {
+        const own = me && s.user_id === me.id;
+        return `<tr>
+          <td><a href="#/profile/${s.user_id}">${U.esc(s.p ? s.p.username : "?")}</a>
+              <span class="muted">(${s.p ? s.p.rating : "?"})</span>
+              ${own ? `<span class="badge finished">${U.esc(t("lobby.yourSeek"))}</span>` : ""}</td>
+          <td><b>${U.fmtTc(s.initial_ms, s.increment_ms)}</b></td>
+          <td><span class="badge rated">${U.esc(t("common.ratedBadge"))}</span></td>
+          <td>${own
+            ? `<button class="btn small" data-unseek="${s.id}">${U.esc(t("common.cancel"))}</button>`
+            : me
+              ? `<button class="btn primary small" data-accept="${s.initial_ms}:${s.increment_ms}">${U.esc(t("common.accept"))}</button>`
+              : `<a class="btn small" href="#/login">${U.esc(t("nav.login"))}</a>`}</td>
+        </tr>`;
+      });
+      const html = trs.length
+        ? `<table class="lobby-list"><tr><th>${U.esc(t("lobby.player"))}</th><th>${U.esc(t("lobby.control"))}</th><th>${U.esc(t("lobby.type"))}</th><th></th></tr>${trs.join("")}</table>`
+        : `<div class="empty">${U.esc(t("lobby.openEmpty"))}</div>`;
+      const sig = rows.map(s => `${s.user_id}:${s.initial_ms}:${s.increment_ms}:${s.optimistic ? 1 : 0}`).join(",");
+      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw
+      box.dataset.sig = sig;
+      box.dataset.err = "0";
+      box.innerHTML = html;
+      U.qsa("[data-unseek]", box).forEach(b => b.addEventListener("click", async () => {
+        b.disabled = true;
+        cancelSeek();
+      }));
+      U.qsa("[data-accept]", box).forEach(b => b.addEventListener("click", () => {
+        const [ms, inc] = b.dataset.accept.split(":").map(Number);
+        startSeek(ms, inc);
+      }));
+    }
+
     async function loadOpen() {
       const box = U.qs("#open-list");
       if (!box) return;
@@ -106,41 +157,13 @@
         .limit(20);
       if (error) {
         box.dataset.err = "1";
-        box.innerHTML = `<div class="empty">Не удалось загрузить вызовы · <a href="#/">Обновить</a></div>`;
+        box.innerHTML = `<div class="empty">${t("lobby.openLoadError")}</div>`;
         return;
       }
-      const rows = (data || []).map(s => {
-        const own = me && s.user_id === me.id;
-        return `<tr>
-          <td><a href="#/profile/${s.user_id}">${U.esc(s.p ? s.p.username : "?")}</a>
-              <span class="muted">(${s.p ? s.p.rating : "?"})</span>
-              ${own ? '<span class="badge finished">это ваш вызов</span>' : ""}</td>
-          <td><b>${U.fmtTc(s.initial_ms, s.increment_ms)}</b></td>
-          <td><span class="badge rated">рейтинг</span></td>
-          <td>${own
-            ? `<button class="btn small" data-unseek="${s.id}">Отмена</button>`
-            : me
-              ? `<button class="btn primary small" data-accept="${s.initial_ms}:${s.increment_ms}">Принять</button>`
-              : `<a class="btn small" href="#/login">Войти</a>`}</td>
-        </tr>`;
-      });
-      const html = rows.length
-        ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
-        : `<div class="empty">Пока нет открытых вызовов — нажмите «Быстрая игра»!</div>`;
-      const sig = (data || []).map(s => `${s.user_id}:${s.initial_ms}:${s.increment_ms}`).join(",");
-      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw
-      box.dataset.sig = sig;
-      box.dataset.err = "0";
-      box.innerHTML = html;
-      U.qsa("[data-unseek]", box).forEach(b => b.addEventListener("click", async () => {
-        b.disabled = true;
-        await API.cancelSeek();
-        loadOpen();
-      }));
-      U.qsa("[data-accept]", box).forEach(b => b.addEventListener("click", () => {
-        const [ms, inc] = b.dataset.accept.split(":").map(Number);
-        startSeek(ms, inc);
-      }));
+      cachedSeeks = data || [];
+      // the real row arrived: the optimistic copy is no longer needed
+      if (optimisticSeek && me && cachedSeeks.some(s => s.user_id === me.id)) optimisticSeek = null;
+      renderOpen();
     }
 
     if (!me) {
@@ -155,6 +178,13 @@
       cleanupFns.push(() => { t(); stopVis(); clearTimeout(openDebounce); });
       return function cleanup() { cleanupFns.forEach(f => f()); };
     }
+
+    // quick pairing state, shared by the quick-pairing panel and the
+    // open-challenges table so a cancel in either place stops both
+    let seeking = false;
+    let seekTimer = null;
+    let pairInFlight = false;   // quick_pair RPC is still running
+    let cancelRequested = false; // cancel arrived while the RPC was in flight
 
     // own active games
     async function loadMyGames() {
@@ -171,28 +201,41 @@
       if (box.dataset.sig === sig) return; // unchanged: skip redraw
       box.dataset.sig = sig;
       box.classList.remove("hidden");
-      box.innerHTML = `<h2>Мои партии</h2>` + data.map(g =>
+      box.innerHTML = `<h2>${U.esc(t("lobby.myGames"))}</h2>` + data.map(g =>
         `<div class="list-item">
-          <span class="badge ${g.status}">${g.status === "active" ? "идёт" : "ожидание"}</span>
-          <a href="#/game/${g.id}">Партия ${U.fmtTc(g.initial_ms, g.increment_ms)}</a>
+          <span class="badge ${g.status}">${U.esc(g.status === "active" ? t("lobby.active") : t("lobby.waiting"))}</span>
+          <a href="#/game/${g.id}">${U.esc(t("lobby.gameItem", { tc: U.fmtTc(g.initial_ms, g.increment_ms) }))}</a>
         </div>`).join("");
     }
     loadMyGames();
 
     // quick pairing
-    let seeking = false;
-    let seekTimer = null;
     async function startSeek(ms, inc) {
       if (seeking) return;
       seeking = true;
+      // optimistic: the seek row shows in the open list at once
+      optimisticSeek = { initial_ms: ms, increment_ms: inc };
+      renderOpen();
       const st = U.qs("#seek-status");
-      st.innerHTML = `<span class="spinner"></span> Ищем соперника (${U.fmtTc(ms, inc)})…
-        <button class="btn ghost small" id="seek-cancel">Отмена</button>`;
+      st.innerHTML = `<span class="spinner"></span> ${U.esc(t("lobby.searching", { tc: U.fmtTc(ms, inc) }))}
+        <button class="btn ghost small" id="seek-cancel">${U.esc(t("common.cancel"))}</button>`;
       U.qs("#seek-cancel", st).addEventListener("click", cancelSeek);
 
+      pairInFlight = true;
       const { data, error } = await API.quickPair(ms, inc);
-      if (error) { seeking = false; st.innerHTML = ""; U.toast(error.message, "error"); return; }
+      pairInFlight = false;
+      if (error) {
+        seeking = false;
+        optimisticSeek = null;
+        renderOpen();
+        st.innerHTML = "";
+        U.toast(error.message, "error");
+        return;
+      }
       if (data) { location.hash = `#/game/${data}`; return; }
+      // the cancel button was pressed while the RPC was running: the seek
+      // it just created has to be removed too
+      if (cancelRequested) { cancelRequested = false; await API.cancelSeek(); return; }
       // wait for the pair by polling own active games
       seekTimer = setInterval(async () => {
         const { data: games } = await API.sb.from("games")
@@ -201,9 +244,18 @@
         if (games && games.length) { stopSeek(); location.hash = `#/game/${games[0].id}`; }
       }, 2500);
     }
+    // single cancel path for both panels: clears the search status and
+    // the open-list row immediately, then tells the server. Also covers
+    // a seek left on the server after a page reload (local state empty).
     async function cancelSeek() {
+      const wasInFlight = pairInFlight && seeking;
       stopSeek();
+      cancelRequested = wasInFlight;
+      optimisticSeek = null;
+      cachedSeeks = cachedSeeks.filter(s => !me || s.user_id !== me.id);
+      renderOpen();
       await API.cancelSeek();
+      loadOpen();
     }
     function stopSeek() {
       seeking = false;
@@ -256,6 +308,7 @@
     return function cleanup() {
       disposed = true;
       if (seekTimer) clearInterval(seekTimer);
+      if (seeking) API.cancelSeek();
       openTimer();
       myTimer();
       stopVisible();
@@ -263,7 +316,6 @@
       clearTimeout(openDebounce);
       API.unsubscribe(rtChan);
       API.unsubscribe(seekChan);
-      if (seeking) API.cancelSeek();
       cleanupFns.forEach(f => f());
     };
   };

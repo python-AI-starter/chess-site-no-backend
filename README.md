@@ -20,8 +20,7 @@ Chess logic is split in two:
 
 The hot path is light: one move means one FEN parse, one move
 application, and one SAN computation, with no redundant move
-generation (mid-game measurements: ~0.47 ms versus ~1.9 ms in the
-original design; `get_game_state` ~0.23 ms versus ~0.82 ms).
+generation.
 
 ## Quick start
 
@@ -59,17 +58,26 @@ so email links lead back to it.
   ends only through its normal outcomes.
 - Premoves, Lichess style: while the opponent is thinking, stage a move
   by click or drag (including promotion) to any square with no local
-  legality checks; it is sent automatically once the opponent moves,
-  and the server rejects it if illegal. Cancel with a click on the
-  premove, the Cancel button, or a right-click anywhere on the board.
+  legality checks. Once the opponent moves, the staged move is
+  validated locally with chess.js: it plays automatically when legal
+  and is cancelled silently when not — the server never receives an
+  illegal move. Cancel manually with a click on the premove, the
+  Cancel button, or a right-click anywhere on the board.
 - Optimistic UI: own moves render instantly (chess.js recomputes the
   position) while the RPC runs in the background; if the server rejects
   the move the board rolls back. Chats behave the same way.
-- Board arrows: right-drag green, Ctrl/Shift right-drag red, Alt
-  right-drag blue; left-click clears them, redrawing the same arrow
-  removes it.
+- Board marks: right-drag draws an arrow, right-click on a square draws
+  a circle around it. Plain is green, Alt is blue, Ctrl/Shift is red;
+  redrawing the same mark removes it. Arrows and circles may coexist;
+  a left-click on the board clears them all. Any right-button press
+  cancels a staged premove.
 - Mobile support: touch-action none on the board and pointercancel
   handling keep drag-and-drop and premoves working on touchscreens.
+- Languages: the interface is localized into Russian, English, and
+  Chinese (`locales/ru.json`, `locales/en.json`, `locales/zh.json`).
+  The language follows the browser settings: Russian or Chinese
+  browsers get their translation, everyone else gets English. Server
+  messages (database errors) are translated on the client as well.
 - Theme: light and dark toggle in the navbar, choice persisted.
 - Clocks are server-backed; see below.
 - Game endings: checkmate, stalemate, resign, flag, threefold
@@ -93,10 +101,12 @@ so email links lead back to it.
   deleting any public message including their own (global chat, club
   chat, forum replies; muting yourself is denied),
   muting authors for N minutes (default 15; a mute blocks global chat,
-  club chat, forum, and blog, but never game chat or DMs), deleting any
-  club, forum thread, blog post, or account (double confirmation),
+  club chat, forum, and blog, but never game chat or DMs),
   banning and unbanning (a ban ends the offender's active games as a
-  forfeit), and assigning user/creator/admin roles. The hierarchy is
+  forfeit), deleting accounts (double confirmation), and assigning
+  user/creator/admin roles. Deleting a whole club, forum thread, or
+  blog post is reserved for the creator; a moderator cannot do it at
+  any level and only removes individual public messages. The hierarchy is
   protected: the creator cannot be muted, banned, deleted, or demoted,
   and only the creator manages admins.
 - Global chat on the home page (guests read, signing in to write,
@@ -108,15 +118,18 @@ so email links lead back to it.
 - Replay: recent games on the leaderboard expand into a replay (board,
   controls, clickable move list, keyboard arrows, autoplay that does
   not stall after the first half-move); finished games have the same
-  replay on their page.
+  replay with the same autoplay button on their page.
 - Open challenges mirror the quick-pairing queue: the list shows every
   player searching through "Быстрая игра" (the seeks table, publicly
-  readable, so guests see it too). Accepting a seek joins the same
-  pool and pairs with its owner at once; the author gets a Cancel
-  button. Link challenges stay private (joinable only through their
-  link) and direct challenges reach the invitee as a DM, so neither
-  appears in the list. The list refreshes through Realtime and plain
-  polling even with a live websocket, plus a manual refresh button.
+  readable, so guests see it too). Own seeks appear in the list at
+  once, before the server confirms them, and a cancel in either panel
+  (the quick-game status or the open list) stops both. Accepting a seek
+  joins the same pool and pairs with its owner at once; the author gets
+  a Cancel button. Link challenges stay private (joinable only through
+  their link) and direct challenges reach the invitee as a DM, so
+  neither appears in the list. The list refreshes through Realtime and
+  plain polling even with a live websocket, plus a manual refresh
+  button.
 - Realtime with a smart fallback: opponent moves, chats, DMs,
   challenges, and notifications arrive instantly over websockets.
   While a websocket is up, polling is fully off; if Realtime is
@@ -144,14 +157,15 @@ decides everything:
   conservatively, so its estimate always runs late and never early.
 - `claim_flag` (opponent is out of time): if server time passed the
   deadline the claim stands and the claimer wins. If time is not out
-  yet the claim is simply rejected with `not_out` and no penalties; the
-  client receives exact server time and retries later if needed. An
-  honest client with conservative sync can only claim late.
+  yet the claim is simply rejected with `not_out` and no penalties;
+  the client receives exact server time and retries later if needed.
+  A premature claim is never punished.
 - Moves arriving after the clock expired are rejected with a 1.5 s
   allowance for network lag; a message can only be late, never early.
-- Illegal moves: a correct client sends only legal moves (premoves are
-  filtered locally through chess.js), and the database rejects any
-  illegal ones; three strikes within 24 hours auto-ban the account.
+- Illegal moves: the client sends only legal moves (premoves are
+  validated against chess.js before anything is sent), and the
+  database rejects any illegal ones with no penalty. No automatic
+  bans exist for moves or clock claims; bans are admin-only.
 - Abandonment: either player may claim a win when the opponent has been
   idle for 3 minutes (while it is the opponent's move) or 5 minutes
   (while it is yours).
@@ -164,7 +178,7 @@ decides everything:
 | Games via RPC only | `games` has no INSERT/UPDATE/DELETE policies, so a game cannot be modified directly; `make_move` checks membership, turn, legality (the database engine), and clocks |
 | Keys | only the `sb_publishable_...` key ships with the frontend; the secret key was used only during setup and never reaches the client |
 | Functions | all `security definer` with `SET search_path = public`; mutation rights revoked from `anon` |
-| Bans | `make_move`, chat, forum, clubs, blog, and matchmaking all check `is_banned`; auto-ban applies only to repeated illegal moves (3 in 24 h) |
+| Bans | `make_move`, chat, forum, clubs, blog, and matchmaking all check `is_banned`; bans are applied only by moderators — there are no automatic bans |
 | Anti-spam | chats and DMs are limited to one message per 0.8 s, enforced in the RPCs |
 
 ## Structure
@@ -173,10 +187,14 @@ decides everything:
 index.html              entry point
 css/style.css           styles, Lichess-inspired
 js/config.js            Supabase URL and publishable key
+js/i18n.js              language detection (ru/zh/en), dictionaries, server-message translation
+locales/ru.json         Russian interface strings
+locales/en.json         English interface strings
+locales/zh.json         Chinese interface strings
 js/api.js               Supabase client, RPC wrappers, Realtime helpers
 js/time.js              conservative server-time synchronization
 js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
-js/board.js             board rendering, click-click and drag&drop
+js/board.js             board rendering, click-click and drag&drop, arrows and circles
 js/game.js              game page: clocks, Realtime, chat, actions, replay
 js/replay.js            replay component (controls, autoplay, move list)
 js/lobby.js             quick pairing, challenges, global chat on the home page
@@ -186,11 +204,11 @@ js/chat.js              global chat and direct messages
 js/app.js               router, navbar, heartbeat, instant rendering
 vendor/supabase.js      supabase-js v2 (UMD, local)
 vendor/chess.js         chess.js 1.4.0 (MIT, local): legal moves,
-                        premoves, and replay on the client
+                        premove validation, and replay on the client
 sql/01_chess_engine.sql chess engine in PL/pgSQL (chess.js equivalent)
 sql/02_schema.sql       tables, RLS, triggers, Realtime
 sql/03_functions_core.sql  SAN, matchmaking, finalization with Elo
-sql/04_functions_game.sql  moves, flags and anti-cheat, draws, takeback, chats
+sql/04_functions_game.sql  moves, flags, draws, takeback, chats
 sql/05_hardening.sql    permissions: mutations require authenticated
 sql/06_social.sql       global chat, DMs, online pulse, direct challenges, replay
 sql/07_pools.sql        rating pools (bullet/blitz/rapid/classic), start 1000

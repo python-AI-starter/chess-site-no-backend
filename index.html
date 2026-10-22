@@ -1,10 +1,10 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Ладья — свободные шахматы</title>
-<meta name="description" content="Простые онлайн-шахматы: быстрые партии, форум, клубы, блог. Валидация ходов в PostgreSQL.">
+<title>Ladya</title>
+<meta name="description" content="Simple online chess.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9820;</text></svg>">
 <link rel="stylesheet" href="css/style.css?v=7">
 <script>
@@ -17,17 +17,17 @@ try {
 </head>
 <body>
 <header class="topnav">
-  <a class="brand" href="#/">&#9820; Ладья</a>
+  <a class="brand" href="#/">&#9820; Ladya</a>
   <nav class="navlinks" id="nav-links">
-    <a href="#/" data-nav="lobby">Играть</a>
-    <a href="#/leaderboard" data-nav="leaderboard">Рейтинг</a>
-    <a href="#/forum" data-nav="forum">Форум</a>
-    <a href="#/clubs" data-nav="clubs">Клубы</a>
-    <a href="#/blog" data-nav="blog">Блог</a>
-    <a href="#/dm" data-nav="dm">Сообщения<span class="nav-badge hidden" id="dm-badge"></span></a>
+    <a href="#/" data-nav="lobby" data-i18n="nav.play">Play</a>
+    <a href="#/leaderboard" data-nav="leaderboard" data-i18n="nav.rating">Rating</a>
+    <a href="#/forum" data-nav="forum" data-i18n="nav.forum">Forum</a>
+    <a href="#/clubs" data-nav="clubs" data-i18n="nav.clubs">Clubs</a>
+    <a href="#/blog" data-nav="blog" data-i18n="nav.blog">Blog</a>
+    <a href="#/dm" data-nav="dm" data-i18n="nav.dm">Messages<span class="nav-badge hidden" id="dm-badge"></span></a>
   </nav>
   <div class="navright">
-    <button class="theme-btn" id="theme-toggle" title="Светлая/тёмная тема">☾</button>
+    <button class="theme-btn" id="theme-toggle" title="Light/dark theme" data-i18n-title="nav.theme">☾</button>
     <div id="nav-user"></div>
   </div>
 </header>
@@ -41,17 +41,18 @@ try {
 <script src="vendor/supabase.js?v=1"></script>
 <script src="vendor/chess.js?v=1"></script>
 <script src="js/config.js?v=1"></script>
-<script src="js/util.js?v=6"></script>
+<script src="js/i18n.js?v=1"></script>
+<script src="js/util.js?v=7"></script>
 <script src="js/time.js?v=1"></script>
-<script src="js/api.js?v=9"></script>
+<script src="js/api.js?v=10"></script>
 <script src="js/pieces.js?v=1"></script>
-<script src="js/board.js?v=5"></script>
-<script src="js/lobby.js?v=7"></script>
-<script src="js/game.js?v=12"></script>
-<script src="js/replay.js?v=2"></script>
-<script src="js/pages.js?v=8"></script>
-<script src="js/community.js?v=7"></script>
-<script src="js/chat.js?v=7"></script>
-<script src="js/app.js?v=6"></script>
+<script src="js/board.js?v=6"></script>
+<script src="js/lobby.js?v=8"></script>
+<script src="js/game.js?v=13"></script>
+<script src="js/replay.js?v=3"></script>
+<script src="js/pages.js?v=9"></script>
+<script src="js/community.js?v=8"></script>
+<script src="js/chat.js?v=8"></script>
+<script src="js/app.js?v=7"></script>
 </body>
 </html>

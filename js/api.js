@@ -40,20 +40,20 @@
   API.signOut = () => sb.auth.signOut();
   API.resetPassword = (email) => sb.auth.resetPasswordForEmail(email);
 
-  // RPC helpers: returns {data, error} where error.message carries
-  // the human-readable database text
+  // RPC helpers: returns {data, error} where error.message carries the
+  // translated database text (server messages are matched in I18n.s)
   API.rpc = async function (fn, params) {
     const { data, error } = await sb.rpc(fn, params || {});
     if (error) {
-      let msg = error.message || "Ошибка";
+      let msg = error.message || I18n.t("common.error");
       try {
         const j = JSON.parse(msg);
         if (j && j.message) msg = j.message;
       } catch (e) { /* not JSON */ }
       // map network failures to a friendly message
       if (/failed to fetch|networkerror|load failed|fetch failed/i.test(msg))
-        msg = "Нет связи с сервером";
-      return { data, error: { message: msg, code: error.code } };
+        msg = I18n.t("net.noConnection");
+      return { data, error: { message: I18n.s(msg), code: error.code } };
     }
     return { data, error: null };
   };
@@ -62,12 +62,12 @@
   API.gameState = (gameId) => API.rpc("get_game_state", { p_game_id: gameId });
   API.quickPair = (ms, inc) => API.rpc("quick_pair", { p_initial_ms: ms, p_increment_ms: inc });
   API.cancelSeek = () => API.rpc("cancel_seek");
-  API.createChallenge = (ms, inc, rated, color, invitee) => {
-    const params = { p_initial_ms: ms, p_increment_ms: inc, p_rated: rated,
-                     p_color: color || "random" };
-    if (invitee) params.p_invitee = invitee;
-    return API.rpc("create_challenge", params);
-  };
+  // p_invitee is always sent (null for link challenges): the RPC call
+  // then matches the single 5-argument function exactly
+  API.createChallenge = (ms, inc, rated, color, invitee) =>
+    API.rpc("create_challenge", { p_initial_ms: ms, p_increment_ms: inc,
+                                  p_rated: rated, p_color: color || "random",
+                                  p_invitee: invitee || null });
   API.cancelWaiting = (id) => API.rpc("cancel_waiting_game", { p_game_id: id });
   API.joinGame = (id) => API.rpc("join_game", { p_game_id: id });
   API.resign = (id) => API.rpc("resign", { p_game_id: id });

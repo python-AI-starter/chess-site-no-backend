@@ -2,10 +2,14 @@
 // Squares are indexed a1=0 ... h8=63, matching the PL/pgSQL engine.
 // Pieces use the cburnett set (js/pieces.js, inline SVG).
 // Premoves: while it is the opponent's turn a move can be staged on any
-// square; it is sent automatically once the opponent moves. Cancel by
-// clicking the premove, the Cancel button, or right-clicking the board.
-// Arrows: right-drag green, Ctrl/Shift right-drag red, Alt right-drag
-// blue; left-click clears them all and redrawing the same arrow removes it.
+// square; it is validated locally with chess.js once the opponent moves
+// and sent only when legal, otherwise it is silently cancelled. Cancel
+// manually by clicking the premove, the Cancel button, or right-clicking
+// the board.
+// Right-click marks: right-drag draws an arrow, right-click on a square
+// draws a circle. Plain is green, Alt is blue, Ctrl/Shift is red.
+// Redrawing the same mark removes it. Arrows and circles may coexist;
+// a left-click on the board clears them all.
 // Touch devices: touch-action:none plus pointercancel handling keep
 // drag-and-drop working without page scrolling.
 (function () {
@@ -13,8 +17,8 @@
 
   const FILES = "abcdefgh";
 
-  // arrow colors (Lichess palette)
-  const ARROW_COLORS = {
+  // mark colors (Lichess palette)
+  const MARK_COLORS = {
     green: "#15781b",
     red: "#882020",
     blue: "#003088"
@@ -60,8 +64,9 @@
       this.interactive = false;
       this.premove = null;           // { from, to, promo } square indexes
       this.arrows = [];              // drawn arrows [{from, to, color}]
+      this.circles = [];             // drawn circles [{sq, color}]
       this._rmbDrag = null;          // {from, color} right-button drag in progress
-      this._rmbPreview = null;
+      this._rmbPreview = null;       // {from, to, color} or {sq, color} preview
       this._promo = null;
       this._premoving = false;       // premove selection mode (no legal targets)
       this._build();
@@ -201,10 +206,10 @@
           d.appendChild(m);
         }
       }
-      this._renderArrows();
+      this._renderMarks();
     }
 
-    // right-button arrows
+    // right-button marks: arrows and circles
     _arrowPoints(fromSq, toSq) {
       const A = this._sqRowCol(fromSq), B = this._sqRowCol(toSq);
       const ax = A.col + 0.5, ay = A.row + 0.5, bx = B.col + 0.5, by = B.row + 0.5;
@@ -227,21 +232,37 @@
       return pts.map(p => `${p[0].toFixed(3)},${p[1].toFixed(3)}`).join(" ");
     }
 
-    _renderArrows() {
+    _renderMarks() {
       const svg = this._arrowSvg;
       if (!svg) return;
       while (svg.firstChild) svg.removeChild(svg.firstChild);
-      const draw = (a, preview) => {
-        if (a.from === a.to) return;
-        const g = document.createElementNS(SVG_NS, "polygon");
-        g.setAttribute("points", this._arrowPoints(a.from, a.to));
-        g.setAttribute("fill", ARROW_COLORS[a.color] || ARROW_COLORS.green);
-        g.setAttribute("fill-opacity", preview ? "0.45" : "0.8");
-        svg.appendChild(g);
+      const isArrow = (m) => m.from !== undefined;
+      const draw = (m, preview) => {
+        const color = MARK_COLORS[m.color] || MARK_COLORS.green;
+        const opacity = preview ? "0.45" : "0.8";
+        if (isArrow(m)) {
+          if (m.from === m.to) return;
+          const g = document.createElementNS(SVG_NS, "polygon");
+          g.setAttribute("points", this._arrowPoints(m.from, m.to));
+          g.setAttribute("fill", color);
+          g.setAttribute("fill-opacity", opacity);
+          svg.appendChild(g);
+        } else {
+          const c = this._sqRowCol(m.sq);
+          const el = document.createElementNS(SVG_NS, "circle");
+          el.setAttribute("cx", c.col + 0.5);
+          el.setAttribute("cy", c.row + 0.5);
+          el.setAttribute("r", "0.41");
+          el.setAttribute("fill", "none");
+          el.setAttribute("stroke", color);
+          el.setAttribute("stroke-width", "0.08");
+          el.setAttribute("stroke-opacity", opacity);
+          svg.appendChild(el);
+        }
       };
       for (const a of this.arrows) draw(a, false);
-      if (this._rmbPreview && this._rmbPreview.from !== this._rmbPreview.to)
-        draw(this._rmbPreview, true);
+      for (const c of this.circles) draw(c, false);
+      if (this._rmbPreview) draw(this._rmbPreview, true);
     }
 
     _sqFromPoint(x, y) {
@@ -254,8 +275,10 @@
       const onMove = (e) => {
         if (!this._rmbDrag) return;
         const sq = this._sqFromPoint(e.clientX, e.clientY);
-        this._rmbPreview = sq == null ? null : { from: this._rmbDrag.from, to: sq, color: this._rmbDrag.color };
-        this._renderArrows();
+        if (sq == null) { this._rmbPreview = null; }
+        else if (sq === this._rmbDrag.from) this._rmbPreview = { sq, color: this._rmbDrag.color };
+        else this._rmbPreview = { from: this._rmbDrag.from, to: sq, color: this._rmbDrag.color };
+        this._renderMarks();
       };
       const onUp = (e) => {
         document.removeEventListener("pointerup", onUp);
@@ -263,13 +286,21 @@
         const drag = this._rmbDrag;
         this._rmbDrag = null;
         this._rmbPreview = null;
-        if (!drag) { this._renderArrows(); return; }
+        if (!drag) { this._renderMarks(); return; }
         const to = this._sqFromPoint(e.clientX, e.clientY);
-        if (to == null || to === drag.from) { this._renderArrows(); return; } // bare right-click draws nothing
-        const i = this.arrows.findIndex(a => a.from === drag.from && a.to === to && a.color === drag.color);
-        if (i >= 0) this.arrows.splice(i, 1);      // same arrow again: remove it
-        else this.arrows.push({ from: drag.from, to, color: drag.color });
-        this._renderArrows();
+        if (to == null) { this._renderMarks(); return; }   // released outside the board
+        if (to === drag.from) {
+          // a right-click on a square toggles a circle on it
+          const i = this.circles.findIndex(c => c.sq === drag.from && c.color === drag.color);
+          if (i >= 0) this.circles.splice(i, 1);
+          else this.circles.push({ sq: drag.from, color: drag.color });
+        } else {
+          // a right-drag toggles an arrow
+          const i = this.arrows.findIndex(a => a.from === drag.from && a.to === to && a.color === drag.color);
+          if (i >= 0) this.arrows.splice(i, 1);      // same arrow again: remove it
+          else this.arrows.push({ from: drag.from, to, color: drag.color });
+        }
+        this._renderMarks();
       };
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
@@ -471,7 +502,9 @@
         const cell = ev.target.closest ? ev.target.closest(".sq") : null;
         if (!cell) return;
         if (ev.button === 2) {
-          // right button draws arrows (green, Ctrl/Shift red, Alt blue); a bare right-click still cancels a premove
+          // right button draws arrows and circles (green, Ctrl/Shift red,
+          // Alt blue); a right-click on a square toggles a circle on it;
+          // any right-button press cancels a staged premove
           ev.preventDefault();
           this._rmbDrag = {
             from: Number(cell.dataset.sq),
@@ -488,8 +521,12 @@
         }
         if (ev.button !== 0) return;
         ev.preventDefault();
-        // left click anywhere clears all arrows
-        if (this.arrows.length) { this.arrows = []; this._renderArrows(); }
+        // left click anywhere clears all arrows and circles together
+        if (this.arrows.length || this.circles.length) {
+          this.arrows = [];
+          this.circles = [];
+          this._renderMarks();
+        }
         this._onDown(Number(cell.dataset.sq), ev);
       });
       // suppress the context menu: the right button is reserved for arrows and premoves
