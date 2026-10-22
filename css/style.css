@@ -415,3 +415,31 @@ html.dark .premove-box { background: #3d2a24; border-color: #6a4436; }
 .moves-list td[data-ply]:hover { background: #eef6fe; }
 .lb-game .list-item { align-items: center; }
 #replaybar { border-top: 1px dashed var(--line); padding-top: 10px; }
+
+/* ---------- v7: роли, модерация, автопрокрутка реплея ---------- */
+.row.wrap { flex-wrap: wrap; }
+
+/* бейджи статусов игрока */
+.role-badge { margin: 0 2px; }
+.badge.role-creator { background: #fdf0d5; color: #8a5a00; border: 1px solid #ecd39a; }
+.badge.role-admin   { background: #e7f0fc; color: #1c4d7c; border: 1px solid #bcd4ef; }
+html.dark .badge.role-creator { background: #3d3320; color: #e5c37c; border-color: #6a5631; }
+html.dark .badge.role-admin   { background: #22354a; color: #9ec7e8; border-color: #3c5a7a; }
+
+/* кнопки модератора у сообщений чата */
+.msg-mod { margin-left: 8px; white-space: nowrap; }
+.mod-btn {
+  background: transparent; border: 1px solid var(--line); border-radius: 6px;
+  font: inherit; font-size: 12px; line-height: 1; padding: 3px 6px; cursor: pointer;
+  color: var(--muted); opacity: .75;
+}
+.mod-btn:hover { opacity: 1; border-color: var(--bad); color: var(--bad); }
+
+/* панель модерации в профиле */
+.mod-panel { border: 1px solid #bcd4ef; }
+html.dark .mod-panel { border-color: #3c5a7a; }
+.mod-panel h3 { margin-top: 0; }
+
+/* кнопка автопрокрутки реплея — отличается от шага «вперёд» */
+.replay-autoplay { font-weight: 700; color: var(--accent-dark); border-color: var(--accent) !important; }
+html.dark .replay-autoplay { color: #9ec7e8; }

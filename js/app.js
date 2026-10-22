@@ -43,7 +43,7 @@
         // перерисовывать навбар только при реальных изменениях — без мерцания
         // при возврате во вкладку (supabase шлёт повторные SIGNED_IN/TOKEN_REFRESHED)
         const sig = [this.profile.id, this.profile.username, this.profile.rating,
-                     this.profile.is_banned ? 1 : 0].join(":");
+                     this.profile.is_banned ? 1 : 0, this.profile.role || "user"].join(":");
         if (box.dataset.sig !== sig) {
           box.dataset.sig = sig;
           box.innerHTML = `

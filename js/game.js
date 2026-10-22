@@ -419,7 +419,8 @@
         const myDelta = rd && me ? (g.white === me.id ? rd.white : rd.black) : null;
         const myDeltaClass = rd && me ? (g.white === me.id ? rd.white_class : rd.black_class) : null;
         const shownDelta = myDeltaClass != null ? myDeltaClass : myDelta;
-        const poolName = rd && rd.class === "blitz" ? "блиц" : rd && rd.class === "rapid" ? "быстрые"
+        const poolName = rd && rd.class === "bullet" ? "пуля" : rd && rd.class === "blitz" ? "блиц"
+                       : rd && rd.class === "rapid" ? "быстрые"
                        : rd && rd.class === "classic" ? "классика" : "";
         c.innerHTML = `
           <div class="result-banner ${cls}">${txt}</div>

@@ -141,13 +141,18 @@
       .limit(15);
 
     const wld = p.games ? `(${p.wins}–${p.losses}–${p.draws})` : "";
+    const myProfile = App.profile || (me ? await API.profile(me.id) : null);
+    const iAmMod = myProfile && (myProfile.role === "creator" || myProfile.role === "admin");
+    // модерация чужого профиля: создателя трогать нельзя, админа — только создателю
+    const canModerate = iAmMod && !own && p.role !== "creator" &&
+                        !(p.role === "admin" && myProfile.role !== "creator");
     container.innerHTML = `
       <div class="card">
         <div class="row spread">
           <div class="row">
             <span class="avatar big">${U.esc((p.username || "?")[0].toUpperCase())}</span>
             <div>
-              <h2 style="margin:0">${U.esc(p.username)} ${dotHtml(p)} ${p.is_banned ? '<span class="badge danger">заблокирован</span>' : ""}</h2>
+              <h2 style="margin:0">${U.esc(p.username)} ${U.roleBadge(p.role)} ${dotHtml(p)} ${p.is_banned ? '<span class="badge danger">заблокирован</span>' : ""}</h2>
               <span class="muted small">На сайте с ${U.fmtDate(p.created_at)}</span>
             </div>
           </div>
@@ -160,6 +165,7 @@
         </div>
         <div class="stat-cards" style="margin-top:16px">
           <div class="stat-card"><b>${p.rating}</b><span>Общий Эло</span></div>
+          <div class="stat-card"><b>${p.rating_bullet ?? 1000}</b><span>Пуля</span></div>
           <div class="stat-card"><b>${p.rating_blitz ?? 1000}</b><span>Блиц</span></div>
           <div class="stat-card"><b>${p.rating_rapid ?? 1000}</b><span>Быстрые</span></div>
           <div class="stat-card"><b>${p.rating_classic ?? 1000}</b><span>Классика</span></div>
@@ -167,6 +173,20 @@
           <div class="stat-card"><b>${p.games ? Math.round(100 * p.wins / p.games) : 0}%</b><span>Побед</span></div>
         </div>
       </div>
+      ${canModerate ? `
+      <div class="card mod-panel">
+        <h3>🛡 Модерация${p.role === "admin" ? " (админ)" : ""}</h3>
+        <div class="row wrap">
+          <button class="btn" id="mod-mute">🔇 Мут (15 мин по умолч.)</button>
+          <button class="btn ghost" id="mod-unmute" title="Снять действующий мут">✓ Снять мут</button>
+          <button class="btn" id="mod-role">Статус: сейчас «${p.role === "admin" ? "админ" : "игрок"}»</button>
+          ${p.is_banned
+            ? `<button class="btn" id="mod-ban">✓ Разбанить</button>`
+            : `<button class="btn danger" id="mod-ban">🚫 Забанить</button>`}
+          <button class="btn danger" id="mod-delacc">🗑 Удалить аккаунт</button>
+        </div>
+        <p class="muted small">Мут запрещает публичные сообщения (чаты/форум/блог), партии и ЛС не трогает. Удаление аккаунта и бан — с двойным подтверждением.</p>
+      </div>` : ""}
       <div class="card">
         <h2>Последние партии</h2>
         <div id="recent"></div>
@@ -202,6 +222,73 @@
         const { error } = await API.setUsername(name);
         if (error) U.toast(error.message, "error");
         else { U.toast("Ник обновлён", "good"); App.route(); }
+      });
+    }
+
+    // ---------- модерация профиля (только creator/admin; роли проверяет БД) ----------
+    if (canModerate) {
+      const modMute = U.qs("#mod-mute");
+      if (modMute) modMute.addEventListener("click", async () => {
+        const res = await U.formModal("Мут игрока " + p.username, [
+          { id: "mins", label: "Минут (1–10080)", value: "15", type: "text" },
+          { id: "reason", label: "Причина (необязательно)", maxlength: 200, placeholder: "спам" }
+        ], "Замутить");
+        if (!res) return;
+        const mins = Math.round(Number(res.mins));
+        if (!(mins >= 1 && mins <= 10080)) return U.toast("Минуты: от 1 до 10080", "error");
+        const { error } = await API.adminMute(p.id, mins, res.reason.trim());
+        if (error) U.toast(error.message, "error");
+        else U.toast(`${p.username} замучен на ${mins} мин (чаты/форум/блог)`, "good");
+      });
+      const modUnmute = U.qs("#mod-unmute");
+      if (modUnmute) modUnmute.addEventListener("click", async () => {
+        const { error } = await API.adminUnmute(p.id);
+        if (error) U.toast(error.message, "error");
+        else U.toast("Мут снят (если был)", "good");
+      });
+      const modBan = U.qs("#mod-ban");
+      if (modBan) modBan.addEventListener("click", async () => {
+        if (p.is_banned) {
+          if (!(await U.confirmModal("Разбанить игрока?", p.username, "Разбанить"))) return;
+          const { error } = await API.adminUnban(p.id);
+          if (error) U.toast(error.message, "error");
+          else { U.toast("Разбанен", "good"); App.route(); }
+        } else {
+          const res = await U.formModal("Бан игрока " + p.username, [
+            { id: "reason", label: "Причина (необязательно)", maxlength: 200, placeholder: "нарушение правил" }
+          ], "Забанить");
+          if (!res) return;
+          if (!(await U.confirmDanger("Забанить " + p.username + "?",
+              "Игрок потеряет возможность играть и писать. Его активные партии завершатся техническим поражением.",
+              "Забанить"))) return;
+          const { error } = await API.adminBan(p.id, res.reason.trim());
+          if (error) U.toast(error.message, "error");
+          else { U.toast("Игрок забанен", "good"); App.route(); }
+        }
+      });
+      const modRole = U.qs("#mod-role");
+      if (modRole) modRole.addEventListener("click", async () => {
+        const res = await U.formModal("Статус игрока " + p.username, [
+          { id: "role", label: "Новый статус", type: "select", value: p.role,
+            options: [
+              { v: "user", l: "Игрок (user)" },
+              { v: "admin", l: "Админ (модерация)" },
+              { v: "creator", l: "Создатель (полные права)" }
+            ] }
+        ], "Назначить");
+        if (!res || res.role === p.role) return;
+        const { error } = await API.adminSetRole(p.id, res.role);
+        if (error) U.toast(error.message, "error");
+        else { U.toast("Статус обновлён", "good"); App.route(); }
+      });
+      const modDel = U.qs("#mod-delacc");
+      if (modDel) modDel.addEventListener("click", async () => {
+        if (!(await U.confirmDanger("Удалить аккаунт " + p.username + "?",
+            "Будут удалены профиль, все его партии, сообщения, клубы и блог. Отменить невозможно.",
+            "Удалить аккаунт"))) return;
+        const { error } = await API.adminDeleteAccount(p.id);
+        if (error) U.toast(error.message, "error");
+        else { U.toast("Аккаунт удалён", "good"); location.hash = "#/"; }
       });
     }
 
@@ -252,9 +339,10 @@
     return () => {};
   };
 
-  // ---------- ЛИДЕРБОРД (пулы: блиц / быстрые / классика) ----------
+  // ---------- ЛИДЕРБОРД (пулы: пуля / блиц / быстрые / классика) ----------
   let openReplay = null; // единственный раскрытый реплей
   const POOLS = [
+    { key: "bullet",  label: "Пуля",     col: "rating_bullet",  games: "games_bullet" },
     { key: "blitz",   label: "Блиц",     col: "rating_blitz",   games: "games_blitz" },
     { key: "rapid",   label: "Быстрые",  col: "rating_rapid",   games: "games_rapid" },
     { key: "classic", label: "Классика", col: "rating_classic", games: "games_classic" }

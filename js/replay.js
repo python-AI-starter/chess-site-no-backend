@@ -19,7 +19,7 @@
         <div class="replay-bar">
           <button class="btn ghost small" data-rp="first" title="В начало">|&#9664;</button>
           <button class="btn ghost small" data-rp="prev" title="Назад">&#9664;</button>
-          <button class="btn ghost small" data-rp="play" title="Автопрокрутка">&#9654;</button>
+          <button class="btn ghost small replay-autoplay" data-rp="play" title="Автопрокрутка — партия играет сама">&#9654; Авто</button>
           <button class="btn ghost small" data-rp="next" title="Вперёд">&#9654;</button>
           <button class="btn ghost small" data-rp="last" title="В конец">&#9654;|</button>
           <span class="muted small" data-rp="pos"></span>
@@ -77,25 +77,28 @@
       return ply > 0 && ply <= mv.length ? mv[ply - 1].u : null;
     }
 
-    goto(ply) {
-      this.stopPlay();
+    goto(ply, keepPlay) {
+      // keepPlay=true — переход ДЕЛАЕТ автопрокрутка: таймер не гасим,
+      // иначе она остановится после первого же полухода (прежний баг)
+      if (!keepPlay) this.stopPlay();
       this.ply = Math.max(0, Math.min(this.total, ply));
       this.render();
     }
     togglePlay() {
       if (this._timer) { this.stopPlay(); return; }
-      if (this.ply >= this.total) this.goto(0);
+      if (this.ply >= this.total) this.ply = 0;
       const btn = U.qs('[data-rp="play"]', this.root);
-      if (btn) btn.innerHTML = "&#9646;&#9646;";
+      if (btn) { btn.innerHTML = "&#9646;&#9646; Пауза"; btn.title = "Остановить автопрокрутку"; }
+      this.render(); // сразу показать стартовую позицию (бывает ply=0)
       this._timer = setInterval(() => {
         if (this.ply >= this.total) { this.stopPlay(); return; }
-        this.goto(this.ply + 1);
+        this.goto(this.ply + 1, true); // НЕ гасим таймер — продолжаем автопрокрутку
       }, 750);
     }
     stopPlay() {
       if (this._timer) { clearInterval(this._timer); this._timer = null; }
       const btn = U.qs('[data-rp="play"]', this.root);
-      if (btn) btn.innerHTML = "&#9654;";
+      if (btn) { btn.innerHTML = "&#9654; Авто"; btn.title = "Автопрокрутка — партия играет сама"; }
     }
 
     render() {
@@ -109,7 +112,13 @@
       if (this.ply > 0) {
         const idx = Math.floor((this.ply - 1) / 2) * 3 + (this.ply % 2 === 1 ? 1 : 2);
         const tds = U.qsa(".rp-moves td", this.root);
-        if (tds[idx]) { tds[idx].classList.add("cur"); }
+        if (tds[idx]) {
+          tds[idx].classList.add("cur");
+          // автопрокрутка списка ходов: текущий ход всегда виден
+          if (tds[idx].scrollIntoView) {
+            tds[idx].scrollIntoView({ block: "nearest" });
+          }
+        }
       }
     }
 

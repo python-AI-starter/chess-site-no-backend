@@ -101,6 +101,19 @@
   API.sendDm = (rcpt, body) => API.rpc("send_dm", { p_recipient: rcpt, p_body: body });
   API.markDmsRead = (partner) => API.rpc("mark_dms_read", { p_partner: partner });
   API.heartbeat = () => API.rpc("heartbeat");
+  // --- модерация (creator/admin; проверки роли — в БД) ---
+  API.adminDeleteMessage = (kind, id) => API.rpc("admin_delete_public_message", { p_kind: kind, p_id: id });
+  API.adminMute = (userId, minutes, reason) => API.rpc("admin_mute", {
+    p_target: userId, p_minutes: minutes || 15, p_reason: reason || null });
+  API.adminUnmute = (userId) => API.rpc("admin_unmute", { p_target: userId });
+  API.adminBan = (userId, reason) => API.rpc("admin_ban", { p_target: userId, p_reason: reason || null });
+  API.adminUnban = (userId) => API.rpc("admin_unban", { p_target: userId });
+  API.adminDeleteAccount = (userId) => API.rpc("admin_delete_account", { p_target: userId });
+  API.adminDeleteClub = (clubId) => API.rpc("admin_delete_club", { p_club_id: clubId });
+  API.adminDeleteThread = (threadId) => API.rpc("admin_delete_thread", { p_thread_id: threadId });
+  API.adminDeleteReply = (replyId) => API.rpc("admin_delete_public_message", { p_kind: "forum_reply", p_id: replyId });
+  API.adminDeleteBlogPost = (postId) => API.rpc("admin_delete_blog_post", { p_post_id: postId });
+  API.adminSetRole = (userId, role) => API.rpc("admin_set_role", { p_target: userId, p_role: role });
   // реплей считается на клиенте (chess.js) — RPC get_replay больше не используется
 
   // --- Realtime ---

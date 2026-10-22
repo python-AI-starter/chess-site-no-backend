@@ -8,9 +8,29 @@
     <div class="empty">${text || "Только для авторизованных"} ·
       <a href="#/login">войти</a> / <a href="#/signup">регистрация</a></div>`;
 
+  // ---------- модерация (creator/admin; окончательная проверка — в БД) ----------
+  async function modProfile() {
+    const me = App.user || await API.user();
+    if (!me) return null;
+    if (App.profile && App.profile.id === me.id) return App.profile;
+    return await API.profile(me.id);
+  }
+  const isMod = (pr) => !!pr && (pr.role === "creator" || pr.role === "admin");
+  // кнопки у сообщения чата клуба (как в общем чате)
+  function clubModActionsHtml(m) {
+    if (!U.amMod()) return "";
+    if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
+    return `<span class="msg-mod">
+      <button class="mod-btn" data-amute="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>
+      <button class="mod-btn" data-adel="${m.id}" data-akind="club" title="Удалить сообщение">×</button>
+    </span>`;
+  }
+
   // ================= ФОРУМ =================
   const ForumPage_render = async function (container) {
     const me = await API.user();
+    const my = await modProfile();
+    const mod = isMod(my);
     container.innerHTML = `
       <div class="row spread"><h1>Форум</h1>
         ${me ? `<button class="btn primary" id="f-new">+ Новая тема</button>` : notAuthBox("")}</div>
@@ -36,7 +56,7 @@
       });
     }
     const { data } = await API.sb.from("forum_threads")
-      .select("*, a:profiles!forum_threads_author_id_fkey(id,username)")
+      .select("*, a:profiles!forum_threads_author_id_fkey(id,username,role)")
       .order("created_at", { ascending: false }).limit(50);
     const { count } = await API.sb.from("forum_replies").select("id", { count: "exact", head: true });
     const box = U.qs("#threads");
@@ -47,21 +67,29 @@
       <div class="list-item">
         <div style="flex:1">
           <a href="#/forum/${t.id}" style="font-weight:700;font-size:16px">${U.esc(t.title)}</a>
-          <div class="muted small"><a href="#/profile/${t.a ? t.a.id : ""}">${U.esc(t.a ? t.a.username : "?")}</a> · ${U.fmtDate(t.created_at)}</div>
+          <div class="muted small"><a href="#/profile/${t.a ? t.a.id : ""}">${U.esc(t.a ? t.a.username : "?")}</a> ${U.roleBadge(t.a && t.a.role)} · ${U.fmtDate(t.created_at)}</div>
         </div>
         <span class="badge">${cnt[t.id] || 0} ответов</span>
+        ${mod ? `<button class="btn ghost small" data-tdel="${t.id}" title="Модератор: удалить тему">🗑</button>` : ""}
       </div>`).join("") : `<div class="empty">Тем пока нет. Будьте первым!</div>`;
+    if (mod) U.qsa("[data-tdel]", box).forEach(b => b.addEventListener("click", async () => {
+      if (!(await U.confirmDanger("Удалить тему со всеми ответами?", "", "Удалить"))) return;
+      const { error } = await API.adminDeleteThread(b.dataset.tdel);
+      if (error) U.toast(error.message, "error"); else App.route();
+    }));
     return () => {};
   };
 
   const ThreadPage_render = async function (container, threadId) {
     const me = await API.user();
+    const my = await modProfile();
+    const mod = isMod(my);
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const { data: t } = await API.sb.from("forum_threads")
-      .select("*, a:profiles!forum_threads_author_id_fkey(id,username)").eq("id", threadId).maybeSingle();
+      .select("*, a:profiles!forum_threads_author_id_fkey(id,username,role)").eq("id", threadId).maybeSingle();
     if (!t) { container.innerHTML = `<div class="card center">Тема не найдена</div>`; return () => {}; }
     const { data: reps } = await API.sb.from("forum_replies")
-      .select("*, a:profiles!forum_replies_author_id_fkey(id,username)")
+      .select("*, a:profiles!forum_replies_author_id_fkey(id,username,role)")
       .eq("thread_id", threadId).order("created_at");
 
     container.innerHTML = `
@@ -70,8 +98,9 @@
         <h1>${U.esc(t.title)}</h1>
         <div class="row"><span class="avatar">${U.esc((t.a && t.a.username || "?")[0].toUpperCase())}</span>
           <a href="#/profile/${t.a ? t.a.id : ""}"><b>${U.esc(t.a ? t.a.username : "?")}</b></a>
+          ${U.roleBadge(t.a && t.a.role)}
           <span class="muted small">${U.fmtDate(t.created_at)}</span>
-          ${me && t.author_id === me.id ? `<button class="btn ghost small" id="t-del">Удалить</button>` : ""}
+          ${me && (t.author_id === me.id || mod) ? `<button class="btn ghost small" id="t-del">Удалить</button>` : ""}
         </div>
         <div class="content-text" style="margin-top:12px">${U.esc(t.body)}</div>
       </div>
@@ -80,9 +109,10 @@
           <div class="list-item">
             <span class="avatar">${U.esc((r.a && r.a.username || "?")[0].toUpperCase())}</span>
             <div style="flex:1"><a href="#/profile/${r.a ? r.a.id : ""}"><b>${U.esc(r.a ? r.a.username : "?")}</b></a>
+              ${U.roleBadge(r.a && r.a.role)}
               <span class="muted small">${U.fmtDate(r.created_at)}</span>
               <div class="content-text">${U.esc(r.body)}</div></div>
-            ${me && r.author_id === me.id ? `<button class="btn ghost small" data-del="${r.id}">×</button>` : ""}
+            ${me && (r.author_id === me.id || mod) ? `<button class="btn ghost small" data-del="${r.id}" data-mod="${mod && r.author_id !== me.id ? 1 : 0}">×</button>` : ""}
           </div>`).join("") || `<div class="empty">Ответов пока нет</div>`}
       </div></div>
       <div class="card">${me ? `
@@ -92,15 +122,29 @@
         : notAuthBox("Чтобы отвечать")}</div>`;
 
     U.qsa("[data-del]").forEach(b => b.addEventListener("click", async () => {
-      if (!(await U.confirmModal("Удалить ответ?", "", "Удалить"))) return;
-      const { error } = await API.sb.from("forum_replies").delete().eq("id", b.dataset.del);
-      if (error) U.toast(error.message, "error"); else App.route();
+      const modAction = b.dataset.mod === "1";
+      if (modAction) {
+        if (!(await U.confirmModal("Удалить ответ?", "", "Удалить"))) return;
+        const { error } = await API.adminDeleteReply(b.dataset.del);
+        if (error) U.toast(error.message, "error"); else App.route();
+      } else {
+        if (!(await U.confirmModal("Удалить ответ?", "", "Удалить"))) return;
+        const { error } = await API.sb.from("forum_replies").delete().eq("id", b.dataset.del);
+        if (error) U.toast(error.message, "error"); else App.route();
+      }
     }));
     const tDel = U.qs("#t-del");
     if (tDel) tDel.addEventListener("click", async () => {
-      if (!(await U.confirmModal("Удалить тему со всеми ответами?", "", "Удалить"))) return;
-      const { error } = await API.sb.from("forum_threads").delete().eq("id", threadId);
-      if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
+      if (mod && t.author_id !== me.id) {
+        // модераторское удаление чужой темы — двойное подтверждение
+        if (!(await U.confirmDanger("Удалить тему со всеми ответами?", "", "Удалить"))) return;
+        const { error } = await API.adminDeleteThread(threadId);
+        if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
+      } else {
+        if (!(await U.confirmModal("Удалить тему со всеми ответами?", "", "Удалить"))) return;
+        const { error } = await API.sb.from("forum_threads").delete().eq("id", threadId);
+        if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
+      }
     });
     const send = U.qs("#r-send");
     if (send) send.addEventListener("click", async () => {
@@ -116,6 +160,7 @@
   // ================= КЛУБЫ =================
   const ClubsPage_render = async function (container) {
     const me = await API.user();
+    const mod = isMod(await modProfile());
     container.innerHTML = `
       <div class="row spread"><h1>Клубы</h1></div>
       ${me ? `<div class="card">
@@ -136,27 +181,35 @@
       else { U.toast("Клуб создан", "good"); App.route(); }
     });
     const { data } = await API.sb.from("clubs")
-      .select("*, o:profiles!clubs_owner_id_fkey(id,username), m:club_members(count)")
+      .select("*, o:profiles!clubs_owner_id_fkey(id,username,role), m:club_members(count)")
       .order("created_at", { ascending: false }).limit(50);
     U.qs("#clubs").innerHTML = (data || []).map(c => `
       <div class="list-item">
         <span class="avatar">${U.esc(c.name[0].toUpperCase())}</span>
         <div style="flex:1">
           <a href="#/clubs/${c.id}" style="font-weight:700;font-size:16px">${U.esc(c.name)}</a>
-          <div class="muted small">Владелец: <a href="#/profile/${c.o ? c.o.id : ""}">${U.esc(c.o ? c.o.username : "?")}</a> · участников: ${c.m && c.m[0] ? c.m[0].count : 1}</div>
+          <div class="muted small">Владелец: <a href="#/profile/${c.o ? c.o.id : ""}">${U.esc(c.o ? c.o.username : "?")}</a> ${U.roleBadge(c.o && c.o.role)} · участников: ${c.m && c.m[0] ? c.m[0].count : 1}</div>
         </div>
+        ${mod ? `<button class="btn ghost small" data-cdel="${c.id}" title="Модератор: удалить клуб">🗑</button>` : ""}
       </div>`).join("") || `<div class="empty">Клубов пока нет</div>`;
+    if (mod) U.qsa("[data-cdel]", U.qs("#clubs")).forEach(b => b.addEventListener("click", async () => {
+      if (!(await U.confirmDanger("Удалить клуб?", "Это действие необратимо.", "Удалить"))) return;
+      const { error } = await API.adminDeleteClub(b.dataset.cdel);
+      if (error) U.toast(error.message, "error"); else App.route();
+    }));
     return () => {};
   };
 
   const ClubPage_render = async function (container, clubId) {
     const me = await API.user();
+    const my = await modProfile();
+    const mod = isMod(my);
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const { data: c } = await API.sb.from("clubs")
       .select("*, o:profiles!clubs_owner_id_fkey(id,username)").eq("id", clubId).maybeSingle();
     if (!c) { container.innerHTML = `<div class="card center">Клуб не найден</div>`; return () => {}; }
     const { data: members } = await API.sb.from("club_members")
-      .select("*, p:profiles!club_members_user_id_fkey(id,username,rating)")
+      .select("*, p:profiles!club_members_user_id_fkey(id,username,rating,role)")
       .eq("club_id", clubId).order("joined_at");
     const myMember = me && (members || []).find(m => m.user_id === me.id);
     const isOwner = me && c.owner_id === me.id;
@@ -166,7 +219,7 @@
     let msgs = [];
     if (canChat) {
       const { data } = await API.sb.from("club_chat")
-        .select("*, p:profiles(username)").eq("club_id", clubId).order("created_at");
+        .select("*, p:profiles(username,role)").eq("club_id", clubId).order("created_at");
       msgs = data || [];
     }
 
@@ -184,6 +237,7 @@
             ${me && !myMember ? `<button class="btn primary" id="join">Вступить</button>` : ""}
             ${myMember && !isOwner ? `<button class="btn ghost" id="leave">Покинуть</button>` : ""}
             ${isOwner ? `<button class="btn danger" id="del">Удалить клуб</button>` : ""}
+            ${mod && !isOwner ? `<button class="btn danger" id="del-mod" title="Модератор: удалить клуб">🗑 Удалить клуб</button>` : ""}
           </div>
         </div>
       </div>
@@ -239,6 +293,12 @@
       const { error } = await API.sb.from("clubs").delete().eq("id", clubId);
       if (error) U.toast(error.message, "error"); else location.hash = "#/clubs";
     });
+    const delMod = U.qs("#del-mod");
+    if (delMod) delMod.addEventListener("click", async () => {
+      if (!(await U.confirmDanger("Удалить клуб?", "Это действие необратимо.", "Удалить"))) return;
+      const { error } = await API.adminDeleteClub(clubId);
+      if (error) U.toast(error.message, "error"); else location.hash = "#/clubs";
+    });
     U.qsa("[data-kick]").forEach(b => b.addEventListener("click", async () => {
       const { error } = await API.sb.from("club_members").delete()
         .eq("club_id", clubId).eq("user_id", b.dataset.kick);
@@ -251,9 +311,10 @@
     if (canChat) {
       const log = U.qs("#club-chat-log");
       const names = {};
+      const roles = {};
       const seen = new Set();
       let pending = [];            // оптимистичные свои сообщения: [{body, el}]
-      (members || []).forEach(m => { if (m.p) names[m.user_id] = m.p.username; });
+      (members || []).forEach(m => { if (m.p) { names[m.user_id] = m.p.username; roles[m.user_id] = m.p.role || "user"; } });
       const addMsg = (m) => {
         if (seen.has(m.id)) return; // realtime + poll могут дублировать
         // своё сообщение могло быть показано оптимистично раньше RPC:
@@ -269,13 +330,39 @@
         seen.add(m.id);
         const name = (m.p && m.p.username) || names[m.user_id] || "?";
         const who = m.user_id
-          ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(name)}:</a>`
+          ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(name)}:</a> ${U.roleBadge(m.p && m.p.role || roles[m.user_id])}`
           : `<b>${U.esc(name)}:</b>`;
-        const d = U.el(`<div class="chat-msg ${m.user_id === me.id ? "mine" : ""}">${who} ${U.linkify(m.body)}</div>`);
+        const d = U.el(`<div class="chat-msg ${m.user_id === me.id ? "mine" : ""}">${who} ${U.linkify(m.body)}${clubModActionsHtml(m)}</div>`);
         log.appendChild(d);
         log.scrollTop = log.scrollHeight;
       };
       msgs.forEach(addMsg);
+      // модерация чата клуба: удалить сообщение / мут автора (делегирование)
+      log.addEventListener("click", async (e) => {
+        const del = e.target.closest("[data-adel]");
+        const mute = e.target.closest("[data-amute]");
+        if (del) {
+          if (!(await U.confirmModal("Удалить сообщение?", "", "Удалить"))) return;
+          const { error } = await API.adminDeleteMessage("club", del.dataset.adel);
+          if (error) return U.toast(error.message, "error");
+          const node = del.closest(".chat-msg");
+          if (node) node.remove();
+          U.toast("Сообщение удалено", "good");
+        } else if (mute) {
+          const target = mute.dataset.amute;
+          const nm = names[target] || "игрока";
+          const res = await U.formModal("Мут игрока " + nm, [
+            { id: "mins", label: "Минут (1–10080)", value: "15", type: "text" },
+            { id: "reason", label: "Причина (необязательно)", maxlength: 200, placeholder: "спам" }
+          ], "Замутить");
+          if (!res) return;
+          const mins = Math.round(Number(res.mins));
+          if (!(mins >= 1 && mins <= 10080)) return U.toast("Минуты: от 1 до 10080", "error");
+          const { error } = await API.adminMute(target, mins, res.reason.trim());
+          if (error) U.toast(error.message, "error");
+          else U.toast(`${nm} замучен на ${mins} мин (чаты/форум/блог)`, "good");
+        }
+      });
       const send = async () => {
         const inp = U.qs("#club-chat-text");
         const body = inp.value.trim();
@@ -323,8 +410,8 @@
       chatChan = API.subscribeClubChat(clubId, async (row) => {
         if (!names[row.user_id]) {
           const { data: pr } = await API.sb.from("profiles")
-            .select("username").eq("id", row.user_id).maybeSingle();
-          if (pr) names[row.user_id] = pr.username;
+            .select("username,role").eq("id", row.user_id).maybeSingle();
+          if (pr) { names[row.user_id] = pr.username; roles[row.user_id] = pr.role || "user"; }
         }
         addMsg(row);
         U.soundMove();
@@ -348,13 +435,13 @@
         ${me ? `<a class="btn primary" href="#/blog/new">+ Написать пост</a>` : ""}</div>
       <div class="card" id="posts"><span class="spinner"></span></div>`;
     const { data } = await API.sb.from("blog_posts")
-      .select("*, a:profiles!blog_posts_author_id_fkey(id,username)")
+      .select("*, a:profiles!blog_posts_author_id_fkey(id,username,role)")
       .order("created_at", { ascending: false }).limit(50);
     U.qs("#posts").innerHTML = (data || []).map(p => `
       <div class="list-item">
         <div style="flex:1">
           <a href="#/blog/${p.id}" style="font-weight:700;font-size:17px">${U.esc(p.title)}</a>
-          <div class="muted small"><a href="#/profile/${p.a ? p.a.id : ""}">${U.esc(p.a ? p.a.username : "?")}</a> · ${U.fmtDate(p.created_at)}</div>
+          <div class="muted small"><a href="#/profile/${p.a ? p.a.id : ""}">${U.esc(p.a ? p.a.username : "?")}</a> ${U.roleBadge(p.a && p.a.role)} · ${U.fmtDate(p.created_at)}</div>
           <div class="muted small" style="margin-top:4px">${U.esc(p.body.slice(0, 140))}${p.body.length > 140 ? "…" : ""}</div>
         </div>
       </div>`).join("") || `<div class="empty">Постов пока нет</div>`;
@@ -388,9 +475,11 @@
 
   const BlogPostPage_render = async function (container, postId) {
     const me = await API.user();
+    const my = await modProfile();
+    const mod = isMod(my);
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const { data: p } = await API.sb.from("blog_posts")
-      .select("*, a:profiles!blog_posts_author_id_fkey(id,username)").eq("id", postId).maybeSingle();
+      .select("*, a:profiles!blog_posts_author_id_fkey(id,username,role)").eq("id", postId).maybeSingle();
     if (!p) { container.innerHTML = `<div class="card center">Пост не найден</div>`; return () => {}; }
     const own = me && me.id === p.author_id;
     container.innerHTML = `
@@ -398,9 +487,11 @@
       <div class="card">
         <h1>${U.esc(p.title)}</h1>
         <div class="row"><a href="#/profile/${p.author_id}"><b>${U.esc(p.a ? p.a.username : "?")}</b></a>
+          ${U.roleBadge(p.a && p.a.role)}
           <span class="muted small">${U.fmtDate(p.created_at)}</span>
           ${own ? `<button class="btn ghost small" id="b-edit">Редактировать</button>
                    <button class="btn ghost small" id="b-del">Удалить</button>` : ""}
+          ${mod && !own ? `<button class="btn danger small" id="b-del-mod" title="Модератор: удалить пост">🗑 Удалить</button>` : ""}
         </div>
         <div class="content-text" id="b-content" style="margin-top:14px">${U.esc(p.body)}</div>
       </div>`;
@@ -427,6 +518,12 @@
         if (error) U.toast(error.message, "error"); else location.hash = "#/blog";
       });
     }
+    const delMod = U.qs("#b-del-mod");
+    if (delMod) delMod.addEventListener("click", async () => {
+      if (!(await U.confirmDanger("Удалить пост?", "", "Удалить"))) return;
+      const { error } = await API.adminDeleteBlogPost(postId);
+      if (error) U.toast(error.message, "error"); else location.hash = "#/blog";
+    });
     return () => {};
   };
 

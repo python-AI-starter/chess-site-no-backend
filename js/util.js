@@ -85,6 +85,25 @@
     });
   };
 
+  // ДВОЙНОЕ подтверждение для необратимых модераторских действий
+  // (удаление аккаунта/клуба/темы форума/поста): «…?» -> «Точно?» (да/нет)
+  U.confirmDanger = async function (title, text, okLabel) {
+    if (!(await U.confirmModal(title, text, okLabel || "Да"))) return false;
+    return U.confirmModal("Точно?", "Действие необратимо. Подтвердите окончательно.", "Да, точно");
+  };
+
+  // Бейдж статуса игрока (создатель/админ) — в профилях и чатах
+  U.roleBadge = function (role) {
+    if (role === "creator") return '<span class="badge role-badge role-creator" title="Создатель сайта">★ создатель</span>';
+    if (role === "admin") return '<span class="badge role-badge role-admin" title="Администратор">🛡 админ</span>';
+    return "";
+  };
+  // true, если профиль текущего пользователя — модератор (creator/admin)
+  U.amMod = function () {
+    const r = App.profile && App.profile.role;
+    return r === "creator" || r === "admin";
+  };
+
   U.infoModal = function (html) {
     const root = U.qs("#modal-root");
     root.innerHTML = "";

@@ -7,13 +7,55 @@
 
   // кэш ников для realtime-строк
   const nameCache = {};
+  const roleCache = {};          // id -> role (user/creator/admin) для бейджей
   async function fetchNames(ids) {
     const need = ids.filter(id => id && !(id in nameCache));
     if (!need.length) return;
-    const { data } = await API.sb.from("profiles").select("id,username").in("id", need);
-    (data || []).forEach(p => { nameCache[p.id] = p.username; });
+    const { data } = await API.sb.from("profiles").select("id,username,role").in("id", need);
+    (data || []).forEach(p => { nameCache[p.id] = p.username; roleCache[p.id] = p.role || "user"; });
   }
   const nameOf = (id) => nameCache[id] || "?";
+
+  // кнопки модератора у сообщения (creator/admin): удалить + мут автора.
+  // Публичные чаты; партийный чат и ЛС модерации не подлежат.
+  function modActionsHtml(m) {
+    if (!U.amMod()) return "";
+    if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
+    return `<span class="msg-mod">
+      <button class="mod-btn" data-amute="${m.user_id}" data-aid="${m.user_id}" title="Мут автора (публичные чаты/форум/блог)">🔇</button>
+      <button class="mod-btn" data-adel="${m.id}" data-akind="${m.kind}" title="Удалить сообщение">×</button>
+    </span>`;
+  }
+
+  // делегированные обработчики модерации для контейнера лога
+  function bindModHandlers(log, refresh) {
+    log.addEventListener("click", async (e) => {
+      const del = e.target.closest("[data-adel]");
+      const mute = e.target.closest("[data-amute]");
+      if (del) {
+        if (!(await U.confirmModal("Удалить сообщение?", "", "Удалить"))) return;
+        const { error } = await API.adminDeleteMessage(del.dataset.akind, del.dataset.adel);
+        if (error) return U.toast(error.message, "error");
+        const node = del.closest(".chat-msg");
+        if (node) node.remove();
+        U.toast("Сообщение удалено", "good");
+        if (refresh) refresh();
+      } else if (mute) {
+        const target = mute.dataset.amute;
+        const nm = nameCache[target] || "игрока";
+        const res = await U.formModal("Мут игрока " + nm, [
+          { id: "mins", label: "Минут (1–10080)", value: "15", type: "text" },
+          { id: "reason", label: "Причина (необязательно)", maxlength: 200, placeholder: "спам" }
+        ], "Замутить");
+        if (!res) return;
+        const mins = Math.round(Number(res.mins));
+        if (!(mins >= 1 && mins <= 10080)) return U.toast("Минуты: от 1 до 10080", "error");
+        const { error } = await API.adminMute(target, mins, res.reason.trim());
+        if (error) U.toast(error.message, "error");
+        else U.toast(`${nm} замучен на ${mins} мин (чаты/форум/блог)`, "good");
+      }
+    });
+  }
 
   // ================= ОБЩИЙ ЧАТ =================
   // container: элемент-обёртка. Возвращает cleanup().
@@ -47,10 +89,10 @@
       const mine = App.user && m.user_id === App.user.id;
       const nm = mine ? ((App.profile && App.profile.username) || "Вы") : nameOf(m.user_id);
       const who = m.user_id
-        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a>`
+        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a> ${U.roleBadge(roleCache[m.user_id])}`
         : `<b>${U.esc(nm)}:</b>`;
-      const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}">
-        ${who} ${U.linkify(m.body)}</div>`);
+      const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}" data-mid="${m.id}">
+        ${who} ${U.linkify(m.body)}${modActionsHtml(Object.assign({ kind: "global" }, m))}</div>`);
       log.appendChild(d);
       while (log.children.length > 200) log.firstChild.remove();
       log.scrollTop = log.scrollHeight;
@@ -59,11 +101,12 @@
     (async function init() {
       if (App.user) blocked = await API.blockedIds();
       const { data } = await API.sb.from("chat_messages")
-        .select("*, p:profiles(username)")
+        .select("*, p:profiles(username,role)")
         .order("created_at", { ascending: false }).limit(50);
       const rows = (data || []).reverse();
-      rows.forEach(m => { if (m.p) nameCache[m.user_id] = m.p.username; });
+      rows.forEach(m => { if (m.p) { nameCache[m.user_id] = m.p.username; roleCache[m.user_id] = m.p.role || "user"; } });
       if (!App.user) await fetchNames(rows.map(m => m.user_id));
+      bindModHandlers(log);
       rows.forEach(addMsg);
       if (!rows.filter(m => !blocked.has(m.user_id)).length)
         log.innerHTML = `<div class="empty">Пусто. Начните беседу!</div>`;
@@ -122,10 +165,10 @@
       async function fetchFresh() {
         if (App.user) blocked = await API.blockedIds();
         const { data: fresh } = await API.sb.from("chat_messages")
-          .select("*, p:profiles(username)")
+          .select("*, p:profiles(username,role)")
           .order("created_at", { ascending: false }).limit(50);
         if (!fresh) return;
-        fresh.forEach(m => { if (m.p) nameCache[m.user_id] = m.p.username; });
+        fresh.forEach(m => { if (m.p) { nameCache[m.user_id] = m.p.username; roleCache[m.user_id] = m.p.role || "user"; } });
         for (const m of fresh.reverse()) {
           if (seen.has(m.id)) continue;
           const isBlocked = blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id);

@@ -74,7 +74,9 @@
           </div>
         </div>
         <div class="card">
-          <h2>Открытые вызовы</h2>
+          <h2 class="spread row">Открытые вызовы
+            <button class="btn ghost small" id="open-refresh" title="Обновить список">⟳ Обновить</button></h2>
+          <p class="muted small">Вызовы видны всем: нажмите «Принять», чтобы начать партию. Свой вызов открывается кнопкой «Открыть».</p>
           <div id="open-list"><span class="spinner"></span></div>
         </div>`}
       <div class="card">
@@ -89,16 +91,24 @@
     const cleanupFns = [() => { if (!disposed) gcCleanup(); }];
 
     if (!me) {
-      // гости: открытые вызовы только для просмотра
+      // гости: открытые вызовы только для просмотра.
+      // Поллинг БЕЗ привязки к realtime (чтобы вызовы были видны всегда),
+      // realtime у гостей не используется — окно свежести по серверному времени.
       async function loadOpenGuest() {
         const box = U.qs("#open-list");
         if (!box) return;
-        const { data } = await API.sb.from("games")
+        const since = new Date(ServerTime.now() - 3600 * 1000).toISOString();
+        const { data, error } = await API.sb.from("games")
           .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
           .eq("status", "waiting").is("invitee", null)
-          .gte("created_at", new Date(Date.now() - 3600 * 1000).toISOString())
+          .gte("created_at", since)
           .order("created_at", { ascending: false })
           .limit(20);
+        if (error) {
+          box.dataset.err = "1";
+          box.innerHTML = `<div class="empty">Не удалось загрузить вызовы · <a href="#/">Обновить</a></div>`;
+          return;
+        }
         const rows = (data || []).map(g => {
           const host = g.white ? g.wp : g.bp;
           const hostId = g.white || g.black;
@@ -114,12 +124,13 @@
           ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
           : `<div class="empty">Пока нет открытых вызовов</div>`;
         const sig = (data || []).map(g => g.id + g.status).join(",");
-        if (box.dataset.sig === sig) return; // ничего не изменилось — не мерцаем
+        if (box.dataset.sig === sig && box.dataset.err !== "1") return; // ничего не изменилось — не мерцаем
         box.dataset.sig = sig;
+        box.dataset.err = "0";
         box.innerHTML = html;
       }
       loadOpenGuest();
-      const t = API.poll(5000, loadOpenGuest);
+      const t = API.poll(4000, loadOpenGuest); // всегда тикает: без realtime у гостей
       const stopVis = API.onVisible(loadOpenGuest);
       cleanupFns.push(() => { t(); stopVis(); });
       return function cleanup() { cleanupFns.forEach(f => f()); };
@@ -201,17 +212,27 @@
     });
 
     // ---------- открытые вызовы ----------
+    // Надёжность прежде всего: список тикает по realtime (мгновенно)
+    // И по обычному поллингу даже при живом websocket — тогда вызовы
+    // гарантированно отображаются у всех и у автора (если realtime
+    // молчит или событие потерялось, список всё равно обновится).
     async function loadOpen() {
       const box = U.qs("#open-list");
       if (!box) return;
-      const { data } = await API.sb.from("games")
+      const since = new Date(ServerTime.now() - 3600 * 1000).toISOString();
+      const { data, error } = await API.sb.from("games")
         .select("id,white,black,rated,initial_ms,increment_ms,created_at,invitee,wp:profiles!games_white_fkey(username,rating),bp:profiles!games_black_fkey(username,rating)")
         .eq("status", "waiting")
-        .gte("created_at", new Date(Date.now() - 3600 * 1000).toISOString())
+        .gte("created_at", since)
         .order("created_at", { ascending: false })
         .limit(20);
-      const rows = (data || [])
-        .filter(g => !g.invitee || g.invitee === me.id)
+      if (error) {
+        box.dataset.err = "1";
+        box.innerHTML = `<div class="empty">Не удалось загрузить вызовы — попробуйте «⟳ Обновить»</div>`;
+        return;
+      }
+      const visible = (data || []).filter(g => !g.invitee || g.invitee === me.id);
+      const rows = visible
         .map(g => {
           const isHost = g.white === me.id || g.black === me.id;
           const host = g.white ? g.wp : g.bp;
@@ -220,7 +241,8 @@
           return `<tr>
           <td><a href="#/profile/${hostId}">${U.esc(host ? host.username : "?")}</a>
               <span class="muted">(${host ? host.rating : "?"})</span>
-              ${invited ? '<span class="badge active">вас приглашают</span>' : ""}</td>
+              ${invited ? '<span class="badge active">вас приглашают</span>' : ""}
+              ${isHost ? '<span class="badge finished">это ваш вызов</span>' : ""}</td>
           <td><b>${U.fmtTc(g.initial_ms, g.increment_ms)}</b></td>
           <td>${g.rated ? '<span class="badge rated">рейтинг</span>' : '<span class="badge">дружеская</span>'}</td>
           <td>${isHost
@@ -228,29 +250,32 @@
             : `<button class="btn primary small" data-join="${g.id}">Принять</button>`}</td>
         </tr>`;
         });
-      const sig = (data || []).filter(g => !g.invitee || g.invitee === me.id).map(g => g.id).join(",");
-      if (box.dataset.sig === sig) return; // без изменений — не мерцаем и не перецепляем
+      const sig = visible.map(g => g.id).join(",");
+      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // без изменений — не мерцаем и не перецепляем
       box.dataset.sig = sig;
+      box.dataset.err = "0";
       box.innerHTML = rows.length
         ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
         : `<div class="empty">Пока нет открытых вызовов — создайте свой!</div>`;
       U.qsa("[data-join]", box).forEach(b => b.addEventListener("click", async () => {
-        const { data: gid, error } = await API.joinGame(b.dataset.join);
-        if (error) return U.toast(error.message, "error");
+        b.disabled = true;
+        const { error } = await API.joinGame(b.dataset.join);
+        if (error) { b.disabled = false; return U.toast(error.message, "error"); }
         location.hash = `#/game/${b.dataset.join}`;
       }));
     }
+    const openRefreshBtn = U.qs("#open-refresh");
+    if (openRefreshBtn) openRefreshBtn.addEventListener("click", loadOpen);
     loadOpen();
-    // открытые вызовы живут на realtime (INSERT+UPDATE: создание и присоединение);
-    // поллинг тикает ТОЛЬКО пока websocket не поднялся; в скрытой вкладке спит
     let rtDebounce = null, _wasDown = false, rtChan = null;
-    const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 300); };
+    const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 250); };
     rtChan = API.subscribeInserts("games", null, rtRefresh, (status) => {
       if (status === "SUBSCRIBED" && _wasDown) { loadOpen(); loadMyGames(); } // доза-fetch после reconnect
       _wasDown = status !== "SUBSCRIBED";
     }, ["INSERT", "UPDATE"]);
-    const openTimer = API.poll(5000, loadOpen, () => API.chUp(rtChan));
-    const myTimer = API.poll(8000, loadMyGames, () => API.chUp(rtChan));
+    // поллинг ВСЕГДА (не гейтится realtime-ом): вызовы видны гарантированно
+    const openTimer = API.poll(4000, loadOpen);
+    const myTimer = API.poll(6000, loadMyGames);
     const stopVisible = API.onVisible(() => { loadOpen(); loadMyGames(); });
 
     return function cleanup() {
