@@ -1,12 +1,9 @@
-// ============================================================
-//  Страницы: вход/регистрация, профиль, лидерборд
-//  Рейтинг: онлайн-пульс, вызов игрока, последние партии
-//  с перемоткой ходов (реплей).
-// ============================================================
+// Pages: login/signup, profile, leaderboard. The leaderboard adds the
+// online pulse, player challenges, and recent games with replay.
 (function () {
   "use strict";
 
-  // онлайн: heartbeat раз в 30 с + запас
+  // online: heartbeat every 30 s plus a grace window
   function isOnline(p) {
     if (!p || !p.last_seen_at) return false;
     return (ServerTime.now() - U.parseTs(p.last_seen_at)) < 75000;
@@ -15,7 +12,7 @@
   const dotHtml = (p) =>
     `<span class="online-dot ${isOnline(p) ? "" : "off"}" title="${isOnline(p) ? "онлайн" : "офлайн"}"></span>`;
 
-  // ---------- ВХОД ----------
+  // login
   const LoginPage_render = function (container) {
     container.innerHTML = `
       <div class="card" style="max-width:420px;margin:30px auto">
@@ -47,7 +44,7 @@
     }
   };
 
-  // ---------- РЕГИСТРАЦИЯ ----------
+  // signup
   const SignupPage_render = function (container) {
     container.innerHTML = `
       <div class="card" style="max-width:420px;margin:30px auto">
@@ -86,7 +83,7 @@
     }
   };
 
-  // ---------- ВЫЗОВ ИГРОКА (общая модалка) ----------
+  // player challenge (shared modal)
   const TC_OPTIONS = [
     [60000, 0, "1+0 · Пуля"], [120000, 1000, "2+1 · Пуля"],
     [180000, 0, "3+0 · Блиц"], [180000, 2000, "3+2 · Блиц"], [300000, 0, "5+0 · Блиц"],
@@ -109,7 +106,7 @@
     const rated = res.rated === "1";
     const { data: gid, error } = await API.createChallenge(ms, inc, rated, res.color, target.id);
     if (error) return U.toast(error.message, "error");
-    // приглашение в личку (не критично, если не уйдёт)
+    // best-effort DM invitation
     API.sendDm(target.id,
       `⚔ Вызываю вас на партию ${U.fmtTc(ms, inc)} (${rated ? "рейтинговая" : "товарищеская"}). ` +
       `Принять: #/game/${gid}`)
@@ -118,14 +115,14 @@
     location.hash = `#/game/${gid}`;
   }
 
-  // ---------- ПРОФИЛЬ ----------
+  // profile
   const ProfilePage_render = async function (container, userId) {
     container.innerHTML = `<div class="card center"><span class="spinner"></span></div>`;
     const me = await API.user();
     const { data: p } = await API.sb.from("profiles").select("*").eq("id", userId).maybeSingle();
     if (!p) { container.innerHTML = `<div class="card center">Профиль не найден</div>`; return () => {}; }
     const own = me && me.id === p.id;
-    // заблокирован ли этот игрок мною (для UI; сервер всё равно проверит)
+    // whether this player is blocked by me (UI only; the server rechecks)
     let iBlocked = false;
     if (me && !own) {
       const { data: blk } = await API.sb.from("blocked_users")
@@ -143,7 +140,7 @@
     const wld = p.games ? `(${p.wins}–${p.losses}–${p.draws})` : "";
     const myProfile = App.profile || (me ? await API.profile(me.id) : null);
     const iAmMod = myProfile && (myProfile.role === "creator" || myProfile.role === "admin");
-    // модерация чужого профиля: создателя трогать нельзя, админа — только создателю
+    // moderating someone else: the creator is untouchable, an admin answers only to the creator
     const canModerate = iAmMod && !own && p.role !== "creator" &&
                         !(p.role === "admin" && myProfile.role !== "creator");
     container.innerHTML = `
@@ -225,7 +222,7 @@
       });
     }
 
-    // ---------- модерация профиля (только creator/admin; роли проверяет БД) ----------
+    // profile moderation (creator/admin; roles verified in the database)
     if (canModerate) {
       const modMute = U.qs("#mod-mute");
       if (modMute) modMute.addEventListener("click", async () => {
@@ -313,7 +310,7 @@
         </div>`;
       }).join("");
     }
-    // карточка заблокированных (только свой профиль)
+    // blocked players card (own profile only)
     if (own) {
       const bl = U.qs("#blocked-list");
       const { data: blockedRows } = await API.sb.from("blocked_users")
@@ -339,8 +336,8 @@
     return () => {};
   };
 
-  // ---------- ЛИДЕРБОРД (пулы: пуля / блиц / быстрые / классика) ----------
-  let openReplay = null; // единственный раскрытый реплей
+  // leaderboard (bullet / blitz / rapid / classic pools)
+  let openReplay = null; // only one replay stays expanded
   const POOLS = [
     { key: "bullet",  label: "Пуля",     col: "rating_bullet",  games: "games_bullet" },
     { key: "blitz",   label: "Блиц",     col: "rating_blitz",   games: "games_blitz" },
@@ -355,8 +352,7 @@
 
   async function expandReplay(slot, gameId) {
     slot.innerHTML = `<div class="center" style="padding:10px"><span class="spinner"></span> Загрузка…</div>`;
-    // ходы и стартовая позиция берутся напрямую из таблицы — позиции после
-    // каждого полухода считает chess.js на клиенте (RPC get_replay не нужен)
+    // moves and the start FEN come straight from the table; positions are computed client-side with chess.js
     const { data, error } = await API.sb.from("games")
       .select("start_fen,moves").eq("id", gameId).maybeSingle();
     if (error || !data) {
@@ -428,14 +424,14 @@
         <div id="lb-games">${renderRecent(recent || [])}</div>
       </div>`;
 
-    // переключение пулов — перерисовка таблицы
+    // pool switching redraws the table
     U.qsa(".pool-tab", container).forEach(b =>
       b.addEventListener("click", () => {
         localStorage.setItem("ladya-pool", b.dataset.pool);
         Pages.leaderboard(container).catch(console.error);
       }));
 
-    // кнопки вызова
+    // challenge buttons
     const byId = {};
     (data || []).forEach(p => { byId[p.id] = p; });
     U.qsa("[data-chal]", container).forEach(b =>
@@ -444,7 +440,7 @@
         if (p) challengeModal(p);
       }));
 
-    // раскрытие реплеев
+    // replay expansion
     U.qsa("[data-watch]", container).forEach(b =>
       b.addEventListener("click", () => {
         const slot = U.qs(`#rp-${b.dataset.watch}`, container);

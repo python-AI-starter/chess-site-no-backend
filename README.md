@@ -1,224 +1,206 @@
-# ♜ Ладья — свободные шахматы
+# Ladya — Free Online Chess
 
-Онлайн-шахматы в духе Lichess (но проще) на **бессерверной архитектуре**:
-статический фронтенд + **Supabase** (PostgreSQL 17 + Auth + Realtime).
-Никакого своего сервера: клиент общается с базой напрямую, вся логика и
-безопасность — на стороне PostgreSQL (RLS + security definer функции).
+Online chess in the spirit of Lichess on a serverless stack: a static
+frontend plus Supabase (PostgreSQL 17, Auth, Realtime). There is no
+application server; the client talks to the database directly, and all
+logic and security live in PostgreSQL (RLS plus security definer functions).
 
-Шахматная логика разделена так:
-- **клиент** — vendored **chess.js 1.4.0** (`vendor/chess.js`, локально,
-  без внешних запросов): подсветка легальных ходов, проверка премувов
-  (нелегальный после хода соперника просто снимается — на сервер не
-  отправляется), перемотка партий (позиции после каждого полухода
-  считаются в браузере — RPC не нужен);
-- **сервер** — PL/pgSQL-движок-аналог chess.js (`sql/01_chess_engine.sql`):
-  битборды, **валидация сделанного хода и результат партии** (мат/пат/
-  правило 50 ходов/недостаток материала). Клиент физически не может
-  сделать нелегальный ход или сгенерировать несуществующую партию.
+Chess logic is split in two:
 
-Горячий путь максимально лёгкий: за один ход сервер один раз парсит FEN,
-один раз применяет ход и один раз считает SAN, без повторной генерации
-ходов (замер на середине партии: ~0.47 мс против ~1.9 мс в исходной версии,
-`get_game_state` — ~0.23 мс против ~0.82 мс).
+- Client: the vendored chess.js 1.4.0 (`vendor/chess.js`, local, no
+  external requests) powers legal-move highlights, premove filtering
+  (an illegal premove is dropped locally and never sent), and game
+  replay (positions after each half-move are computed in the browser,
+  no RPC needed).
+- Server: a PL/pgSQL engine equivalent to chess.js
+  (`sql/01_chess_engine.sql`) with bitboards validates every submitted
+  move and decides the game result (checkmate, stalemate, fifty-move
+  rule, insufficient material). The client cannot play an illegal move
+  or fabricate a game.
 
----
+The hot path is light: one move means one FEN parse, one move
+application, and one SAN computation, with no redundant move
+generation (mid-game measurements: ~0.47 ms versus ~1.9 ms in the
+original design; `get_game_state` ~0.23 ms versus ~0.82 ms).
 
-## Быстрый старт
+## Quick start
 
-Проект Supabase уже настроен (схема применена), ключи вписаны в
-`js/config.js`. Достаточно открыть сайт:
+The Supabase project is already configured (schema applied, keys set in
+`js/config.js`), so serving the static files is enough:
 
 ```bash
-# РЕКОМЕНДУЕТСЯ: порт 3000 — на него ведёт ссылка из письма подтверждения
-python3 -m http.server 3000    # в папке сайта → http://localhost:3000
-# любой другой статический хостинг/порт тоже работает,
-# но письмо подтверждения ведёт на Site URL проекта (http://localhost:3000)
+# port 3000 is recommended: the confirmation email links to it
+python3 -m http.server 3000    # in the site folder -> http://localhost:3000
+# any other static host or port works too, but see the note below
 ```
 
-1. Зарегистрируйтесь (email + пароль, ник 2–20 символов).
-2. Перейдите по ссылке из письма — **вы войдёте автоматически**, логиниться
-   не нужно (сессия подхватывается прямо из ссылки, `detectSessionInUrl`).
-3. «Быстрая игра» — подберётся соперник из очереди; либо создайте
-   «Вызов по ссылке» и отправьте ссылку другу.
+1. Sign up (email plus password, nickname 2-20 characters).
+2. Follow the link from the confirmation email: you are signed in
+   automatically, no login form needed (the session is picked up from
+   the URL, `detectSessionInUrl`).
+3. Use Quick pairing to find an opponent from the queue, or create a
+   link challenge and send it to a friend.
 
-> Если письмо не приходит: в дашборде Supabase → Authentication →
-> поставьте «Confirm email» = OFF, тогда вход работает сразу после
-> регистрации (для приватной игры с друзьями это удобно).
->
-> Если сайт будет жить не на localhost:3000: в дашборде Supabase →
-> Authentication → URL Configuration → Site URL укажите адрес сайта
-> (и добавьте его в Redirect URLs) — тогда и ссылка из письма будет
-> вести на него.
+If emails are not delivered: in the Supabase dashboard, Authentication,
+turn "Confirm email" OFF and sign-in works right after signup. If the
+site will not live on localhost:3000, set the site address as the Site
+URL in Authentication, URL Configuration (and add it to Redirect URLs)
+so email links lead back to it.
 
-## Функциональность
+## Features
 
-- **Партии**: пуля/блиц/быстрые/классика (0.5+0 … 30+20, свой контроль —
-  минимум 30 секунд: ультрапуля отключена, чтобы поток ходов от нескольких
-  параллельных партий типа 15+0 не грузил базу как DDOS),
-  **рейтинговые пулы** — отдельный Эло для пули, блица, быстрых и классики
-  (старт 1000, K=32; класс определяется по контролю), вызовы по ссылке и
-  **адресные вызовы игроку**
-  (принять может только приглашённый, приглашение приходит в личные
-  сообщения), просмотр чужих партий.
-- **Премувы** как на Lichess: пока ход соперника, можно «зарядить» свой ход
-  (клик/перетаскивание, включая превращение, — на ЛЮБУЮ клетку, без
-  локальных проверок легальности) — он отправится автоматически сразу
-  после хода соперника; нелегальный сервер отклонит и позиция откатится.
-  **Отмена премува: клик по премуву, кнопка «Отменить» или ПКМ по любому
-  месту доски** (контекстное меню на доске подавлено).
-- **Оптимистичный интерфейс**: свой ход рисуется мгновенно (позицию
-  считает chess.js на клиенте), RPC уходит в фоне — интерфейс не ждёт
-  сервер; если сервер отклонил ход, позиция откатывается. То же —
-  во всех чатах: сообщение появляется сразу, без ожидания ответа.
-- **Стрелки на доске** (как на Lichess): ПКМ от клетки к клетке —
-  зелёная, Ctrl/Shift+ПКМ — красная, Alt+ПКМ — синяя; ЛКМ в любом
-  месте доски стирает все стрелки, повторное рисование той же стрелки
-  убирает её.
-- **Мобильные устройства**: touch-action:none на доске (жест пальцем
-  не скроллит страницу), обработка pointercancel — drag-and-drop и
-  премувы работают на тачскринах.
-- **Тема**: светлая/тёмная — кнопка ☾/☀ в навбаре, выбор запоминается.
-- **Часы** — серверные. Подробнее ниже.
-- **Завершения**: мат, пат, сдача, флаг, трёхкратное повторение,
-  правило 50 ходов, недостаток материала, ничья по соглашению,
-  покинутая партия (заявление через 3/5 минуты отсутствия соперника).
-- **В партии**: чат (только участники, Realtime, антиспам), предложение
-  ничьей, сдача, **откат хода (takeback)** — игрок просит соперника
-  разрешить переиграть последний ход; при согласии позиция
-  пересчитывается движком в базе, часы обоих восстанавливаются.
-- **Фигуры** — векторный набор **cburnett** (классика Lichess), встроены
-  инлайн SVG: без внешних запросов, чётко на любом масштабе.
-- **Форум** (темы + ответы), **Клубы** (страница клуба: описание, список
-  участников справа, чат клуба в реальном времени), **Блог**
-  (посты, редактирование своего), **Лидерборд**, профили.
-- **Лидерборд по пулам**: табы «Пуля / Блиц / Быстрые / Классика» — своя
-  таблица рейтингов для каждого контроля; в профиле — все рейтинги.
-- **Модерация (статусы CREATOR и ADMIN)**: у создателя сайта и админов —
-  бейдж в профилях и чатах; они могут удалить любое публичное сообщение
-  (общий чат, чат клуба, ответы форума) и замутить его автора на N минут
-  (по умолчанию 15; мут запрещает писать в общий чат, чат клуба, форум
-  и блог — партийный чат и ЛС не трогаются); удалить любой клуб/тему
-  форума/пост блога/аккаунт (двойное подтверждение «Точно?»); банить/
-  разбанить (бан завершает активные партии нарушителя техническим
-  поражением); назначать игрокам статусы user/creator/admin.
-  Иерархия защищена: создателя нельзя мутить/банить/удалять/разжаловать,
-  над админом полномочия только у создателя.
-- **Общий чат** на главной странице (гости читают, писать — после входа,
-  Realtime, антиспам) и **личные сообщения**: список диалогов с счётчиком
-  непрочитанных (бейдж в меню), переписка в реальном времени,
-  ссылки на партии кликабельны. Кнопки «Написать»/«Вызвать» — в профилях.
-- **Онлайн-пульс**: клиент раз в 30 с шлёт `heartbeat`; в рейтинге и
-  профилях у игроков горит пульсирующий индикатор «онлайн».
-- **Перемотка партий**: на странице рейтинга — «Последние партии» с
-  раскрывающимся реплеем (доска + кнопки |< < ▶Авто > >| + кликабельный
-  список ходов + стрелки ← →; автопрокрутка играет партию сама до конца
-  и не сбивается после первого полухода); на странице завершённой
-  партии — та же перемотка. Позиции считает движок в БД (RPC `get_replay`).
-- **Открытые вызовы в лобби — гарантированно видны**: список обновляется
-  и по realtime, и обычным поллингом даже при живом websocket (плюс
-  кнопка «⟳ Обновить» и окно свежести по серверному времени) — вызов
-  отображается у всех игроков и у его автора (у автора — кнопка
-  «Открыть», у остальных — «Принять» с немедленным стартом партии).
-- **Realtime + умная страховка**: ходы соперника, чаты (партии/клуба/общий),
-  ЛС, вызовы и уведомления приходят мгновенно через Supabase Realtime
-  (websocket). Пока websocket жив — **поллинг полностью отключён**
-  (ноль лишних запросов); если realtime недоступен — включается опрос.
-  В скрытой вкладке всё спит; при возврате — тихая доза-обновление данных
-  БЕЗ перерисовки интерфейса (интерфейс перерисовывается только при
-  реальном входе/выходе или фактическом изменении данных).
-- **Блокировка игроков**: в любом профиле кнопка «🚫 Заблокировать».
-  Заблокированный не может писать вам в ЛС и вызывать на партию
-  (проверка в БД, в обе стороны); его сообщения в общем чате
-  скрываются; на вашем профиле — карточка «Заблокированные игроки»
-  (видна только вам) с разблокировкой. Кнопки «Написать»/«Вызвать»
-  в заблокированном профиле скрываются. **Быстрая игра тоже не сводит
-  игроков с взаимной блокировкой** (quick_pair, 10_fix_quick_pair_blocks.sql).
-- **Ссылки на профили везде, где есть ники**: чаты (партии/клуба/общий,
-  ЛС), авторы тем форума и постов блога, владельцы клубов, список
-  участников клуба, соперники в историях партий, лидерборд.
-- **Главная страница рендерится мгновенно** (каркас до сетевых вызовов),
-  активный пункт меню подсвечивается синхронно на каждый переход.
-- Все вводы данных — в модальных формах/отдельных страницах,
-  никаких браузерных prompt().
+- Games: bullet, blitz, rapid, and classic (0.5+0 up to 30+20, custom
+  controls with a 30 second minimum), rating pools with separate Elo
+  per class (start 1000, K=32, class derived from the control), link
+  challenges, direct challenges to a player (only the invitee can
+  accept, the invite arrives as a DM), and spectating other games.
+- Premoves, Lichess style: while the opponent is thinking, stage a move
+  by click or drag (including promotion) to any square with no local
+  legality checks; it is sent automatically once the opponent moves,
+  and the server rejects it if illegal. Cancel with a click on the
+  premove, the Cancel button, or a right-click anywhere on the board.
+- Optimistic UI: own moves render instantly (chess.js recomputes the
+  position) while the RPC runs in the background; if the server rejects
+  the move the board rolls back. Chats behave the same way.
+- Board arrows: right-drag green, Ctrl/Shift right-drag red, Alt
+  right-drag blue; left-click clears them, redrawing the same arrow
+  removes it.
+- Mobile support: touch-action none on the board and pointercancel
+  handling keep drag-and-drop and premoves working on touchscreens.
+- Theme: light and dark toggle in the navbar, choice persisted.
+- Clocks are server-backed; see below.
+- Game endings: checkmate, stalemate, resign, flag, threefold
+  repetition, fifty-move rule, insufficient material, agreement draw,
+  and abandonment (claimable after 3/5 minutes of inactivity).
+- In game: chat (participants only, Realtime, rate limited), draw
+  offers, resign, and takeback. A takeback asks the opponent to allow
+  replaying the last move; on approval the engine recomputes the
+  position and both clocks are restored.
+- Pieces: the cburnett vector set (the Lichess classic) inlined as SVG,
+  sharp at any scale, no external requests.
+- Community: forum (threads plus replies), clubs (club page with
+  description, member list, and live club chat), blog (posts with
+  editing), leaderboard, and profiles.
+- Pool leaderboards with tabs for bullet, blitz, rapid, and classic;
+  profiles show every rating.
+- Moderation (CREATOR and ADMIN roles): badges in profiles and chats,
+  deleting any public message (global chat, club chat, forum replies),
+  muting authors for N minutes (default 15; a mute blocks global chat,
+  club chat, forum, and blog, but never game chat or DMs), deleting any
+  club, forum thread, blog post, or account (double confirmation),
+  banning and unbanning (a ban ends the offender's active games as a
+  forfeit), and assigning user/creator/admin roles. The hierarchy is
+  protected: the creator cannot be muted, banned, deleted, or demoted,
+  and only the creator manages admins.
+- Global chat on the home page (guests read, signing in to write,
+  Realtime, rate limited) and direct messages: a dialog list with an
+  unread badge, live conversations, and clickable game links. Write and
+  Challenge buttons live in profiles.
+- Online pulse: a heartbeat every 30 s lights a pulsing online
+  indicator in leaderboards and profiles.
+- Replay: recent games on the leaderboard expand into a replay (board,
+  controls, clickable move list, keyboard arrows, autoplay that does
+  not stall after the first half-move); finished games have the same
+  replay on their page.
+- Open challenges are always visible: the list refreshes through both
+  Realtime and plain polling even with a live websocket, plus a manual
+  refresh button and a server-time freshness window. The author sees an
+  Open button, everyone else sees Accept with an immediate start.
+- Realtime with a smart fallback: opponent moves, chats, DMs,
+  challenges, and notifications arrive instantly over websockets.
+  While a websocket is up, polling is fully off; if Realtime is
+  unavailable, polling takes over. Hidden tabs sleep, and returning to
+  a tab does one quiet refetch without redrawing the UI unless data
+  actually changed.
+- Player blocks: block from any profile. A blocked player cannot DM you
+  or challenge you (enforced in the database, both directions), their
+  global chat messages are hidden, and quick pairing never pairs
+  blocked players (`10_fix_quick_pair_blocks.sql`). Your profile keeps
+  a private blocked-players card with unblocking.
+- Profile links everywhere nicknames appear: chats, forum and blog
+  authors, club owners and members, game histories, leaderboard.
+- The home page renders instantly (skeleton before network calls), and
+  the active menu item is highlighted synchronously on every navigation.
+- All input happens in modal forms or dedicated pages; no browser
+  prompt() dialogs.
 
-## Как работают часы и защита от обмана
+## Clocks and anti-cheat
 
-Часы считает **клиент** (по серверному времени), но решает **база**:
+The client renders the clocks using server time, but the database
+decides everything:
 
-- Каждый RPC-ответ содержит `server_now_ms`, клиент синхронизирует часы
-  **консервативно** (оценка всегда «опаздывает», никогда не спешит —
-  задержки сети могут только опоздать, раньше времени честный клиент
-  заявить не может в принципе).
-- `claim_flag` (заявка «время соперника вышло»):
-  - если серверное время ≥ дедлайна — флаг засчитан, заявителю победа;
-  - если время **ещё не вышло** — заявка просто отклоняется
-    (`status: 'not_out'`), **без каких-либо санкций**: клиент получает
-    точное серверное время и повторит позже, если надо. Честный клиент
-    с консервативной синхронизацией заявляет только с опозданием.
-- Ходы, пришедшие после конца времени, отклоняются с запасом 1.5 с
-  на сетевой лаг (сообщение может только опоздать — обман невозможен).
-- Нелегальные ходы: систематическая отправка (3 за 24 часа) банит аккаунт.
-  Правильный клиент шлёт только легальные ходы — премувы фильтруются
-  локально через chess.js и нелегальные до сервера не долетают.
-- Покинутая партия: любой участник заявляет победу, если соперник без
-  движения ≥ 3 минут (когда ход соперника) / ≥ 5 минут (когда ваш ход).
+- Every RPC reply carries `server_now_ms`; the client syncs
+  conservatively, so its estimate always runs late and never early.
+- `claim_flag` (opponent is out of time): if server time passed the
+  deadline the claim stands and the claimer wins. If time is not out
+  yet the claim is simply rejected with `not_out` and no penalties; the
+  client receives exact server time and retries later if needed. An
+  honest client with conservative sync can only claim late.
+- Moves arriving after the clock expired are rejected with a 1.5 s
+  allowance for network lag; a message can only be late, never early.
+- Illegal moves: a correct client sends only legal moves (premoves are
+  filtered locally through chess.js), and the database rejects any
+  illegal ones; three strikes within 24 hours auto-ban the account.
+- Abandonment: either player may claim a win when the opponent has been
+  idle for 3 minutes (while it is the opponent's move) or 5 minutes
+  (while it is yours).
 
-## Модель безопасности
+## Security model
 
-| Слой | Что защищает |
+| Layer | Protection |
 |---|---|
-| RLS на всех таблицах | `profiles`, `games`, `seeks`, `game_chat`, `club_chat`, `chat_messages`, `dm_messages`, `forum_*`, `clubs`, `club_members`, `blog_posts` — включён; общий чат и игры публичны на чтение, личные сообщения — только участникам переписки, записи через политики или только через функции |
-| Игры только через RPC | у таблицы `games` **нет** политик INSERT/UPDATE/DELETE — изменить партию напрямую невозможно; `make_move` проверяет участника, очерёдность, легальность (движок в БД), часы |
-| Ключи | в фронтенд вписан только `sb_publishable_...`; секретный ключ использовался лишь при настройке (создание тестов, admin API) и в клиент не попадает |
-| Функции | все `security definer` c `SET search_path = public`; мутации отозваны у роли `anon` |
-| Баны | `make_move`, чат, форум, клубы, блог, поиск пары — всё проверяет `is_banned`; автобан — только за систематическую отправку нелегальных ходов (3 за 24 ч) |
-| Анти-спам | чаты/ЛС ≤ 1 сообщения / 0.8 c (проверка в RPC) |
+| RLS on every table | `profiles`, `games`, `seeks`, `game_chat`, `club_chat`, `chat_messages`, `dm_messages`, `forum_*`, `clubs`, `club_members`, `blog_posts`; global chat and games are publicly readable, DMs only for the participants, writes through policies or RPC-only |
+| Games via RPC only | `games` has no INSERT/UPDATE/DELETE policies, so a game cannot be modified directly; `make_move` checks membership, turn, legality (the database engine), and clocks |
+| Keys | only the `sb_publishable_...` key ships with the frontend; the secret key was used only during setup and never reaches the client |
+| Functions | all `security definer` with `SET search_path = public`; mutation rights revoked from `anon` |
+| Bans | `make_move`, chat, forum, clubs, blog, and matchmaking all check `is_banned`; auto-ban applies only to repeated illegal moves (3 in 24 h) |
+| Anti-spam | chats and DMs are limited to one message per 0.8 s, enforced in the RPCs |
 
-## Структура
+## Structure
 
+```text
+index.html              entry point
+css/style.css           styles, Lichess-inspired
+js/config.js            Supabase URL and publishable key
+js/api.js               Supabase client, RPC wrappers, Realtime helpers
+js/time.js              conservative server-time synchronization
+js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
+js/board.js             board rendering, click-click and drag&drop
+js/game.js              game page: clocks, Realtime, chat, actions, replay
+js/replay.js            replay component (controls, autoplay, move list)
+js/lobby.js             quick pairing, challenges, global chat on the home page
+js/pages.js             login/signup, profile, leaderboard (pulse, replays)
+js/community.js         forum, clubs with club chat, blog
+js/chat.js              global chat and direct messages
+js/app.js               router, navbar, heartbeat, instant rendering
+vendor/supabase.js      supabase-js v2 (UMD, local)
+vendor/chess.js         chess.js 1.4.0 (MIT, local): legal moves,
+                        premoves, and replay on the client
+sql/01_chess_engine.sql chess engine in PL/pgSQL (chess.js equivalent)
+sql/02_schema.sql       tables, RLS, triggers, Realtime
+sql/03_functions_core.sql  SAN, matchmaking, finalization with Elo
+sql/04_functions_game.sql  moves, flags and anti-cheat, draws, takeback, chats
+sql/05_hardening.sql    permissions: mutations require authenticated
+sql/06_social.sql       global chat, DMs, online pulse, direct challenges, replay
+sql/07_pools.sql        rating pools (bullet/blitz/rapid/classic), start 1000
+sql/08_blocks.sql       player blocks (DMs and challenges denied both ways)
+sql/09_optimization.sql hot path optimization
+sql/10_fix_quick_pair_blocks.sql  quick pairing respects blocks
+sql/11_admin_moderation.sql  creator/admin roles, mutes, deletions, bans
 ```
-index.html            — точка входа
-css/style.css         — стили (вдохновлено lichess)
-js/config.js          — URL + publishable-ключ Supabase
-js/api.js             — клиент Supabase, обёртки RPC
-js/time.js            — консервативная синхронизация серверного времени
-js/pieces.js          — фигуры cburnett (инлайн SVG, CC-BY-SA 3.0)
-js/board.js           — доска: отрисовка, click-click и drag&drop
-js/game.js            — страница партии: часы, realtime, чат, действия, перемотка
-js/replay.js          — компонент реплея (перемотка, автопрокрутка, список ходов)
-js/lobby.js           — быстрый поиск, вызовы, общий чат на главной
-js/pages.js           — вход/регистрация/профиль/лидерборд (пульс, вызовы, реплеи)
-js/community.js       — форум, клубы (+ чат клуба), блог
-js/chat.js            — общий чат и личные сообщения (диалоги, бейдж непрочитанных)
-js/app.js             — роутер, навбар, heartbeat, мгновенный рендер
-vendor/supabase.js    — supabase-js v2 (UMD, локально)
-vendor/chess.js       — chess.js 1.4.0 (MIT, локально): легальные ходы,
-                        премувы и реплей на клиенте
-sql/01_chess_engine.sql — шахматный движок на PL/pgSQL (chess.js-аналог)
-sql/02_schema.sql       — таблицы, RLS, триггеры, Realtime
-sql/03_functions_core.sql — SAN, матчмейкинг, финализация + Эло
-sql/04_functions_game.sql — ходы, флаги/античит, ничьи, takeback, чаты
-sql/05_hardening.sql    — права: мутации только authenticated
-sql/06_social.sql       — общий чат, ЛС, онлайн-пульс, адресные вызовы, реплей
-sql/07_pools.sql        — рейтинговые пулы (пуля/блиц/быстрые/классика), старт 1000
-sql/08_blocks.sql       — блокировки игроков (ЛС и вызовы заблокированных — запрещены)
-sql/09_optimization.sql — оптимизация горячего пути
-sql/10_fix_quick_pair_blocks.sql — quick_pair не сводит игроков с блокировкой
-sql/11_admin_moderation.sql — статусы creator/admin, мут, удаление любых
-                              публичных сообщений/клубов/тем/постов/аккаунтов, бан
-```
 
-## Установка на чистый проект Supabase (если нужно)
+## Installing on a fresh Supabase project
 
-1. SQL Editor → выполнить по порядку `sql/01…08`.
-2. Authentication → включить Email, при желании выключить подтверждение;
-   Site URL = адрес сайта (для локальной отладки — http://localhost:3000).
-3. Вписать URL и publishable-ключ в `js/config.js`.
-4. (Realtime включён автоматически через `supabase_realtime` publication
-   в `02_schema.sql`.)
+1. SQL Editor: run `sql/01` through `sql/08` in order, then the rest if
+   moderation and the quick-pairing fix are wanted.
+2. Authentication: enable Email, optionally disable confirmation; set
+   Site URL to the site address (http://localhost:3000 for local runs).
+3. Put the URL and publishable key into `js/config.js`.
+4. Realtime is enabled automatically through the `supabase_realtime`
+   publication in `02_schema.sql`.
 
-## Лицензии
+## Licenses
 
-- Набор фигур «cburnett» © Colin M.L. Burnett,
-  лицензия CC-BY-SA 3.0 / GFDL, источник: Wikimedia Commons
-  (<https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces>).
+The cburnett piece set is (c) Colin M.L. Burnett, licensed
+CC-BY-SA 3.0 / GFDL, source: Wikimedia Commons
+(https://commons.wikimedia.org/wiki/Category:SVG_chess_pieces).

@@ -1,4 +1,4 @@
-// ---------- Утилиты ----------
+// Shared UI helpers.
 (function () {
   "use strict";
 
@@ -19,7 +19,7 @@
   U.qs = (sel, root) => (root || document).querySelector(sel);
   U.qsa = (sel, root) => Array.from((root || document).querySelectorAll(sel));
 
-  // timestamptz ISO (может содержать микросекунды) -> ms
+  // ISO timestamptz (may carry microseconds) to milliseconds
   U.parseTs = function (ts) {
     if (ts == null) return null;
     if (typeof ts === "number") return ts;
@@ -32,7 +32,7 @@
 
   U.fmtClock = function (ms) {
     if (ms == null || ms < 0) ms = 0;
-    const t = Math.ceil(ms / 100) / 10; // десятые
+    const t = Math.ceil(ms / 100) / 10; // tenths
     const h = Math.floor(ms / 3600000);
     const m = Math.floor(ms % 3600000 / 60000);
     const s = Math.floor(ms % 60000 / 1000);
@@ -85,20 +85,19 @@
     });
   };
 
-  // ДВОЙНОЕ подтверждение для необратимых модераторских действий
-  // (удаление аккаунта/клуба/темы форума/поста): «…?» -> «Точно?» (да/нет)
+  // Double confirmation for irreversible moderation actions: ask, then confirm.
   U.confirmDanger = async function (title, text, okLabel) {
     if (!(await U.confirmModal(title, text, okLabel || "Да"))) return false;
     return U.confirmModal("Точно?", "Действие необратимо. Подтвердите окончательно.", "Да, точно");
   };
 
-  // Бейдж статуса игрока (создатель/админ) — в профилях и чатах
+  // Player role badge (creator/admin) for profiles and chats
   U.roleBadge = function (role) {
     if (role === "creator") return '<span class="badge role-badge role-creator" title="Создатель сайта">★ создатель</span>';
     if (role === "admin") return '<span class="badge role-badge role-admin" title="Администратор">🛡 админ</span>';
     return "";
   };
-  // true, если профиль текущего пользователя — модератор (creator/admin)
+  // True when the current user is a moderator (creator/admin)
   U.amMod = function () {
     const r = App.profile && App.profile.role;
     return r === "creator" || r === "admin";
@@ -115,21 +114,21 @@
     root.appendChild(m);
   };
 
-  // Текст -> безопасный HTML с кликабельными ссылками (в т.ч. #/... маршруты)
+  // Escape text and turn links into anchors, including #/... routes.
   U.linkify = function (text) {
     const s = U.esc(text);
-    // сначала внутренние маршруты вида #/game/<uuid>
+    // internal #/game/<uuid> routes first
     let out = s.replace(/(^|\s)(#\/[a-z]+\/[0-9a-f-]{10,})/gi,
       (m, sp, url) => `${sp}<a href="${url}">${url}</a>`);
-    // затем внешние http(s)
+    // then external http(s) links
     out = out.replace(/(https?:\/\/[^^\s<>&"']+)/g,
       (m, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);
     return out;
   };
 
-  // Модальная форма: fields = [{ id, label, type: 'text'|'textarea'|'select',
+  // Modal form. fields: [{ id, label, type: 'text'|'textarea'|'select',
   //   options: [{v,l}], value, placeholder, maxlength, rows }]
-  //   -> Promise<{id: value, ...} | null>
+  // Resolves to {id: value, ...} or null when cancelled.
   U.formModal = function (title, fields, okLabel) {
     return new Promise((resolve) => {
       const root = U.qs("#modal-root");
@@ -186,7 +185,7 @@
     });
   };
 
-  // простые звуки через WebAudio
+  // Simple WebAudio sounds
   let audioCtx = null;
   U.beep = function (freq, dur, type) {
     try {
@@ -201,7 +200,7 @@
       g.gain.setValueAtTime(0.06, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + (dur || 0.08));
       o.start(t); o.stop(t + (dur || 0.08));
-    } catch (e) { /* без звука */ }
+    } catch (e) { /* audio unavailable */ }
   };
   U.soundMove = () => U.beep(440, 0.06, "sine");
   U.soundCapture = () => U.beep(220, 0.09, "square");

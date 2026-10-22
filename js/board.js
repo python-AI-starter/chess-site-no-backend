@@ -1,23 +1,19 @@
-// ============================================================
-//  Шахматная доска: отрисовка + click-click и drag&drop.
-//  Поле a1=0 ... h8=63 (как в движке на PL/pgSQL).
-//  Фигуры — векторный набор cburnett (js/pieces.js, инлайн SVG).
-//  Премув: пока ход соперника, можно «зарядить» свой ход — он
-//  отправится автоматически, как только придёт ход соперника.
-//  Отмена премува: клик по премуву, кнопка «Отменить» или ПКМ
-//  по любому месту доски (как на Lichess).
-//  Стрелки: ПКМ от клетки к клетке — зелёная; Ctrl/Shift+ПКМ —
-//  красная; Alt+ПКМ — синяя. ЛКМ в любом месте доски стирает
-//  все стрелки. Повторное рисование той же стрелки убирает её.
-//  Тач-устройства: touch-action:none на доске (CSS), обработка
-//  pointercancel — палец не скроллит страницу, drag работает.
-// ============================================================
+// Chessboard: rendering plus click-click and drag&drop input.
+// Squares are indexed a1=0 ... h8=63, matching the PL/pgSQL engine.
+// Pieces use the cburnett set (js/pieces.js, inline SVG).
+// Premoves: while it is the opponent's turn a move can be staged on any
+// square; it is sent automatically once the opponent moves. Cancel by
+// clicking the premove, the Cancel button, or right-clicking the board.
+// Arrows: right-drag green, Ctrl/Shift right-drag red, Alt right-drag
+// blue; left-click clears them all and redrawing the same arrow removes it.
+// Touch devices: touch-action:none plus pointercancel handling keep
+// drag-and-drop working without page scrolling.
 (function () {
   "use strict";
 
   const FILES = "abcdefgh";
 
-  // цвета стрелок (как на Lichess)
+  // arrow colors (Lichess palette)
   const ARROW_COLORS = {
     green: "#15781b",
     red: "#882020",
@@ -26,7 +22,7 @@
   const SVG_NS = "http://www.w3.org/2000/svg";
 
   function fenToSquares(fen) {
-    // 64-элементный массив: индекс = sq, значение 'P'|'p'|...|null
+    // 64-slot array: index = square, value 'P'|'p'|...|null
     const arr = new Array(64).fill(null);
     const rows = fen.split(" ")[0].split("/");
     for (let r = 0; r < 8; r++) {
@@ -46,10 +42,10 @@
     /**
      * opts: {
      *   onMove(fromName, toName, promoChar|null),
-     *   onPremove(fromName, toName, promoChar|null),  — ход «в уме», до хода соперника
-     *   canMove(): boolean               — можно ли ходить сейчас (мой ход)
-     *   canPremove(): boolean            — можно ли ставить премув (партия активна, я участник)
-     *   myColor(): 'white'|'black'|null  — цвет взаимодействующей стороны
+     *   onPremove(fromName, toName, promoChar|null),  move staged before the opponent replies
+     *   canMove(): boolean               whether the player may move now
+     *   canPremove(): boolean            whether a premove may be staged
+     *   myColor(): 'white'|'black'|null  color of the interacting side
      * }
      */
     constructor(container, opts) {
@@ -57,17 +53,17 @@
       this.opts = opts || {};
       this.orientation = "white";
       this.squares = new Array(64).fill(null);
-      this.legalMoves = [];          // uci строки
+      this.legalMoves = [];          // UCI strings
       this.selected = null;          // sq index
       this.lastMove = null;          // [fromSq, toSq]
       this.checkSq = null;
       this.interactive = false;
-      this.premove = null;           // { from, to, promo } — sq-индексы
-      this.arrows = [];              // [{from, to, color}] — нарисованные стрелки
-      this._rmbDrag = null;          // {from, color} — ПКМ-рисование в процессе
+      this.premove = null;           // { from, to, promo } square indexes
+      this.arrows = [];              // drawn arrows [{from, to, color}]
+      this._rmbDrag = null;          // {from, color} right-button drag in progress
       this._rmbPreview = null;
       this._promo = null;
-      this._premoving = false;       // выбор премува (вместо легальных целей)
+      this._premoving = false;       // premove selection mode (no legal targets)
       this._build();
       this._bindPointer();
     }
@@ -83,7 +79,7 @@
           const d = document.createElement("div");
           d.className = `sq ${dark ? "dark" : "light"}`;
           d.dataset.sq = sq;
-          // координаты
+          // coordinates
           if (row === 7) {
             const f = document.createElement("span");
             f.className = "coord file";
@@ -100,7 +96,7 @@
           this.root.appendChild(d);
         }
       }
-      // SVG-слой для стрелок (поверх фигур, клики не перехватывает)
+      // SVG layer for arrows; above pieces, never captures clicks
       this._arrowSvg = document.createElementNS(SVG_NS, "svg");
       this._arrowSvg.setAttribute("class", "arrows");
       this._arrowSvg.setAttribute("viewBox", "0 0 8 8");
@@ -109,7 +105,7 @@
     }
 
     _sqAt(row, col) {
-      // row 0 — верхняя горизонталь
+      // row 0 is the top rank
       if (this.orientation === "white") return (7 - row) * 8 + col;
       return row * 8 + (7 - col);
     }
@@ -131,7 +127,7 @@
     setMoves(list) {
       this.legalMoves = list || [];
       this._clearSelection();
-      // премув не трогаем — он живёт до нового состояния партии
+      // keep the premove; it lives until the next game state
       this.render();
     }
     setInteractive(v) { this.interactive = !!v; if (!v) this._clearSelection(); this.render(); }
@@ -180,7 +176,7 @@
     render() {
       for (let sq = 0; sq < 64; sq++) {
         const d = this.cells[sq];
-        // очистить содержимое кроме координат
+        // clear everything except coordinates
         for (const c of Array.from(d.children)) {
           if (!c.classList.contains("coord")) c.remove();
         }
@@ -208,18 +204,18 @@
       this._renderArrows();
     }
 
-    // ---------- СТРЕЛКИ (ПКМ) ----------
+    // right-button arrows
     _arrowPoints(fromSq, toSq) {
       const A = this._sqRowCol(fromSq), B = this._sqRowCol(toSq);
       const ax = A.col + 0.5, ay = A.row + 0.5, bx = B.col + 0.5, by = B.row + 0.5;
       let dx = bx - ax, dy = by - ay;
       const len = Math.hypot(dx, dy) || 1;
       dx /= len; dy /= len;
-      const px = -dy, py = dx;                       // перпендикуляр
+      const px = -dy, py = dx;                       // perpendicular
       const tail = 0.34, headLen = 0.46, w = 0.13, W = 0.30;
-      const sx = ax + dx * tail,     sy = ay + dy * tail;       // начало ствола
-      const bx2 = bx - dx * headLen, by2 = by - dy * headLen;   // основание головы
-      const tx = bx - dx * 0.10,     ty = by - dy * 0.10;       // кончик
+      const sx = ax + dx * tail,     sy = ay + dy * tail;       // shaft start
+      const bx2 = bx - dx * headLen, by2 = by - dy * headLen;   // arrowhead base
+      const tx = bx - dx * 0.10,     ty = by - dy * 0.10;       // tip
       const pts = [
         [sx + px * w,  sy + py * w],
         [bx2 + px * w, by2 + py * w],
@@ -269,9 +265,9 @@
         this._rmbPreview = null;
         if (!drag) { this._renderArrows(); return; }
         const to = this._sqFromPoint(e.clientX, e.clientY);
-        if (to == null || to === drag.from) { this._renderArrows(); return; } // клик ПКМ — стрелки нет
+        if (to == null || to === drag.from) { this._renderArrows(); return; } // bare right-click draws nothing
         const i = this.arrows.findIndex(a => a.from === drag.from && a.to === to && a.color === drag.color);
-        if (i >= 0) this.arrows.splice(i, 1);      // та же стрелка — стираем
+        if (i >= 0) this.arrows.splice(i, 1);      // same arrow again: remove it
         else this.arrows.push({ from: drag.from, to, color: drag.color });
         this._renderArrows();
       };
@@ -279,7 +275,7 @@
       document.addEventListener("pointerup", onUp);
     }
 
-    // ---------- выбор и взаимодействие ----------
+    // selection and interaction
     _onDown(sq, ev) {
       if (this._promo) return;
       const myColor = this.opts.myColor ? this.opts.myColor() : null;
@@ -307,10 +303,10 @@
         return;
       }
 
-      // ---------- ПРЕМУВ: ход ещё не мой, но партия идёт ----------
+      // premove: not my turn yet but the game is running
       if (!this.opts.canPremove || !this.opts.canPremove()) return;
 
-      // клик по своему премуву = отмена
+      // clicking the staged premove cancels it
       if (this.premove && (sq === this.premove.from || sq === this.premove.to)) {
         this.premove = null;
         this._clearSelection();
@@ -319,14 +315,14 @@
         return;
       }
 
-      // повторный клик по выбранной фигуре — снять выделение
+      // clicking the selected piece again clears selection
       if (this._premoving && this.selected === sq) {
         this._clearSelection();
         this.render();
         return;
       }
 
-      // клик по фигуре моего цвета — выбор для премува (пока ничего не выбрано)
+      // clicking an own piece starts premove selection
       const color = this._pieceColorAt(sq);
       if ((!this._premoving || this.selected == null) && color && color === myColor) {
         this.selected = sq;
@@ -337,11 +333,10 @@
         return;
       }
 
-      // выделение активно + клик по ЛЮБОЙ другой клетке = премув.
-      // Никаких проверок легальности/владения: и пустая клетка, и чужая
-      // фигура, и своя — премув ставится одинаково (drag и click работают
-      // идентично). Легальность решится после хода соперника, окончательный
-      // арбитр — сервер (нелегальный откатится).
+      // selection active plus a click on any other square stages a premove.
+      // No legality or ownership checks: empty, enemy, or own squares all
+      // behave the same, and drag matches click-click. The server is the
+      // final judge and rejects illegal premoves.
       if (this._premoving && this.selected != null && sq !== this.selected) {
         this._attemptMove(this.selected, sq, true);
         return;
@@ -356,7 +351,7 @@
         variants = (this._targets && this._targets[toSq]) || [];
         if (!variants.length) return;
       }
-      // превращение? пешка моего цвета идёт на последнюю горизонталь
+      // promotion: own pawn heading to the last rank
       const p = this.squares[fromSq];
       const isPawn = p === "P" || p === "p";
       const lastRank = isPawn ? toSq >> 3 : -1;
@@ -397,7 +392,7 @@
       }
       this._promo = wrap;
       root.appendChild(wrap);
-      // разместить у поля превращения
+      // position beside the promotion square
       const cell = this.cells[toSq].getBoundingClientRect();
       const rootRect = root.getBoundingClientRect();
       const vertical = white
@@ -438,16 +433,14 @@
         if (finished) return;
         finished = true;
         cleanup();
-        // pieceEl мог быть пересоздан при перерисовке доски во время drag —
-        // сбросим прозрачность и текущему элементу на клетке
+        // the piece element may have been rebuilt mid-drag; reset opacity on the current one
         const cur = this.cells[fromSq] && this.cells[fromSq].querySelector(".piece");
         if (cur) cur.style.opacity = "";
         const sq = this._sqFromPoint(e.clientX, e.clientY);
         if (sq == null) { this._clearSelection(); this.render(); return; }
-        if (sq === fromSq) return;           // клик без переноса — остаёмся выбранными
+        if (sq === fromSq) return;           // click without drop: stay selected
         if (isPremove) {
-          // премув: ЛЮБАЯ клетка, без проверок легальности —
-          // ровно то же, что второй клик click-click
+          // premove: any square, no legality checks, same as click-click
           this._attemptMove(fromSq, sq, true);
           return;
         }
@@ -458,8 +451,7 @@
         this._clearSelection();
         this.render();
       };
-      // на тачскринах браузер может прервать жест (скролл/системный жест):
-      // убираем «призрак» и оставляем доску в консистентном состоянии
+      // touch browsers may abort the gesture: remove the ghost and keep the board consistent
       const onCancel = () => {
         if (finished) return;
         finished = true;
@@ -479,8 +471,7 @@
         const cell = ev.target.closest ? ev.target.closest(".sq") : null;
         if (!cell) return;
         if (ev.button === 2) {
-          // ПКМ: рисование стрелки (зелёная / Ctrl|Shift — красная / Alt — синяя).
-          // Клик ПКМ без переноса по-прежнему снимает премув (как на Lichess).
+          // right button draws arrows (green, Ctrl/Shift red, Alt blue); a bare right-click still cancels a premove
           ev.preventDefault();
           this._rmbDrag = {
             from: Number(cell.dataset.sq),
@@ -497,11 +488,11 @@
         }
         if (ev.button !== 0) return;
         ev.preventDefault();
-        // ЛКМ в любом месте доски — стереть все стрелки
+        // left click anywhere clears all arrows
         if (this.arrows.length) { this.arrows = []; this._renderArrows(); }
         this._onDown(Number(cell.dataset.sq), ev);
       });
-      // контекстное меню на доске подавляем: ПКМ занят стрелками/премувом
+      // suppress the context menu: the right button is reserved for arrows and premoves
       this.root.addEventListener("contextmenu", (ev) => ev.preventDefault());
     }
 

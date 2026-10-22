@@ -1,13 +1,11 @@
-// ============================================================
-//  Соцсеть: общий чат (лобби) и личные сообщения.
-//  Гости читают общий чат; писать — только после входа (RPC).
-// ============================================================
+// Global chat (lobby) and direct messages. Guests read the global
+// chat; posting requires signing in and goes through RPCs.
 (function () {
   "use strict";
 
-  // кэш ников для realtime-строк
+  // username cache for realtime rows
   const nameCache = {};
-  const roleCache = {};          // id -> role (user/creator/admin) для бейджей
+  const roleCache = {};          // id -> role (user/creator/admin) for badges
   async function fetchNames(ids) {
     const need = ids.filter(id => id && !(id in nameCache));
     if (!need.length) return;
@@ -16,8 +14,8 @@
   }
   const nameOf = (id) => nameCache[id] || "?";
 
-  // кнопки модератора у сообщения (creator/admin): удалить + мут автора.
-  // Публичные чаты; партийный чат и ЛС модерации не подлежат.
+  // moderator buttons on a message (creator/admin): delete plus mute.
+  // Public chats only; game chat and DMs are never moderated.
   function modActionsHtml(m) {
     if (!U.amMod()) return "";
     if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
@@ -27,7 +25,7 @@
     </span>`;
   }
 
-  // делегированные обработчики модерации для контейнера лога
+  // delegated moderation handlers for a chat log container
   function bindModHandlers(log, refresh) {
     log.addEventListener("click", async (e) => {
       const del = e.target.closest("[data-adel]");
@@ -57,8 +55,7 @@
     });
   }
 
-  // ================= ОБЩИЙ ЧАТ =================
-  // container: элемент-обёртка. Возвращает cleanup().
+  // Global chat. container is the wrapper element; returns cleanup().
   function globalChat(container) {
     container.innerHTML = `
       <div class="chat-box small">
@@ -68,14 +65,13 @@
     const log = U.qs("#gchat-log", container);
     const seen = new Set();
     let chan = null;
-    let blocked = new Set();       // скрывать сообщения заблокированных мною
-    let pending = [];              // оптимистичные свои сообщения: [{body, el}]
+    let blocked = new Set();       // hide messages from players I blocked
+    let pending = [];              // own optimistic messages: [{body, el}]
     const stopPollRef = { stop: null, stopVisible: null };
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
-      // своё сообщение могло быть показано оптимистично раньше RPC:
-      // совпало — считаем подтверждённым, элемент уже стоит
+      // own message already shown optimistically: treat the match as confirmation
       if (App.user && m.user_id === App.user.id) {
         const i = pending.findIndex(p => p.body === m.body);
         if (i >= 0) {
@@ -85,7 +81,7 @@
         }
       }
       seen.add(m.id);
-      if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // скрыто
+      if (blocked.has(m.user_id) && !(App.user && m.user_id === App.user.id)) return; // hidden
       const mine = App.user && m.user_id === App.user.id;
       const nm = mine ? ((App.profile && App.profile.username) || "Вы") : nameOf(m.user_id);
       const who = m.user_id
@@ -114,7 +110,7 @@
       const me = App.user;
       const inp = U.qs("#gchat-input", container);
       if (me) {
-        // свой ник — из профиля (RPC-ответ его не содержит)
+        // own username comes from the profile (the RPC reply omits it)
         if (!nameCache[me.id]) {
           nameCache[me.id] = (App.profile && App.profile.username) || null;
           if (!nameCache[me.id]) {
@@ -132,7 +128,7 @@
           if (!body) return;
           t.value = "";
           log.querySelector(".empty") && log.querySelector(".empty").remove();
-          // ОПТИМИСТИЧНО: показываем сообщение сразу, RPC — в фоне
+          // optimistic: show instantly, RPC in the background
           const nm = (App.profile && App.profile.username) || "Вы";
           const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.linkify(body)}</div>`);
           log.appendChild(tmp);
@@ -148,7 +144,7 @@
             t.value = body;
             return;
           }
-          if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+          if (res && res.message) seen.add(res.message.id); // no duplicates later
           const i = pending.indexOf(pend);
           if (i >= 0) pending.splice(i, 1);
         };
@@ -159,9 +155,8 @@
           <a href="#/login">вход</a> / <a href="#/signup">регистрация</a></div>`;
       }
 
-      // realtime (RLS: публичное чтение — гостей тоже доставит)
-      // доза-fetch новых сообщений: используется и поллингом-фоллбэком,
-      // и при переподключении websocket, и при возврате во вкладку
+      // realtime (RLS allows public reads, so guests receive rows too);
+      // fetchFresh also serves fallback polling, reconnects, and tab returns
       async function fetchFresh() {
         if (App.user) blocked = await API.blockedIds();
         const { data: fresh } = await API.sb.from("chat_messages")
@@ -189,8 +184,7 @@
         stopPollRef._everDown = status !== "SUBSCRIBED";
       });
 
-      // fallback-поллинг — тикает ТОЛЬКО когда websocket не поднялся;
-      // в скрытой вкладке и при живом realtime — ноль запросов
+      // fallback polling ticks only while the websocket is down; hidden tabs and live realtime produce zero requests
       stopPollRef.stop = API.poll(4000, fetchFresh, () => API.chUp(chan));
       stopPollRef.stopVisible = API.onVisible(fetchFresh);
     })();
@@ -202,7 +196,7 @@
     };
   }
 
-  // ================= СПИСОК ДИАЛОГОВ =================
+  // Dialog list
   const MessagesPage_render = async function (container) {
     const me = App.user || await API.user();
     container.innerHTML = `
@@ -235,7 +229,7 @@
         .or(`sender_id.eq.${me.id},recipient_id.eq.${me.id}`)
         .order("created_at", { ascending: false }).limit(300);
 
-      // группируем по собеседнику
+      // group by conversation partner
       const convs = {};
       (msgs || []).forEach(m => {
         const pid = m.sender_id === me.id ? m.recipient_id : m.sender_id;
@@ -245,7 +239,7 @@
       const list = Object.values(convs).sort((a, b) =>
         U.parseTs(b.last.created_at) - U.parseTs(a.last.created_at));
 
-      // ничего не изменилось — DOM не трогаем (без мерцания)
+      // unchanged: leave the DOM alone
       const sig = list.map(c => [c.partner, c.unread, c.last.body, c.last.sender_id === me.id ? 1 : 0].join("~")).join("|");
       if (sig === lastSig) return;
       lastSig = sig;
@@ -277,8 +271,7 @@
     }
     await renderDialogs();
     let lastRt = null, _wasDown = false;
-    // список диалогов живёт на realtime: новое письмо — мгновенно;
-    // поллинг тикает только когда websocket не поднялся
+    // the dialog list lives on realtime; polling covers websocket outages
     chan = API.subscribeInserts("dm_messages", null, () => {
       clearTimeout(lastRt);
       lastRt = setTimeout(() => renderDialogs().catch(() => {}), 300);
@@ -287,7 +280,7 @@
       _wasDown = status !== "SUBSCRIBED";
     });
     stopPoll = API.poll(8000, () => {
-      // не трогаем DOM во время набора текста в модалке
+      // leave the DOM alone while typing in the modal
       if (U.qs("#modal-root").childElementCount) return;
       renderDialogs().catch(() => {});
     }, () => API.chUp(chan));
@@ -299,7 +292,7 @@
     <div class="empty">${text || "Только для авторизованных"} ·
       <a href="#/login">войти</a> / <a href="#/signup">регистрация</a></div>`;
 
-  // ================= ПЕРЕПИСКА =================
+  // Conversation thread
   const ThreadPage_render = async function (container, partnerId) {
     const me = App.user || await API.user();
     if (!me) {
@@ -338,12 +331,11 @@
     const log = U.qs("#dm-log");
     const seen = new Set();
     let chan = null, stopPoll = null, stopVisible = null;
-    let pending = [];              // оптимистичные свои сообщения: [{body, el}]
+    let pending = [];              // own optimistic messages: [{body, el}]
 
     function addMsg(m) {
       if (seen.has(m.id)) return;
-      // своё сообщение могло быть показано оптимистично раньше RPC:
-      // совпало — считаем подтверждённым, элемент уже стоит
+      // own message already shown optimistically: treat the match as confirmation
       if (m.sender_id === me.id) {
         const i = pending.findIndex(p => p.body === m.body);
         if (i >= 0) {
@@ -378,7 +370,7 @@
       if (!body) return;
       t.value = "";
       log.querySelector(".empty") && log.querySelector(".empty").remove();
-      // ОПТИМИСТИЧНО: письмо появляется сразу, RPC — в фоне
+      // optimistic: show instantly, RPC in the background
       const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">Вы:</a> ${U.linkify(body)}
         <span class="muted tiny">${U.fmtDate(new Date().toISOString())}</span></div>`);
       log.appendChild(tmp);
@@ -394,15 +386,14 @@
         t.value = body;
         return;
       }
-      if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+      if (res && res.message) seen.add(res.message.id); // no duplicates later
       const i = pending.indexOf(pend);
       if (i >= 0) pending.splice(i, 1);
     };
     U.qs("#dm-send").addEventListener("click", send);
     U.qs("#dm-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
-    // доза-fetch новых писем: общий для поллинга-фоллбэка, переподключения
-    // websocket и возврата во вкладку (дедуп seen — лишнего рендера нет)
+    // fresh fetch shared by fallback polling, reconnects, and tab returns; seen dedup prevents extra renders
     async function fetchFresh() {
       const { data: fresh } = await API.sb.from("dm_messages")
         .select("*")
@@ -435,7 +426,7 @@
       _wasDown = status !== "SUBSCRIBED";
     });
 
-    // fallback-поллинг — только когда websocket не поднялся; в скрытой вкладке спит
+    // fallback polling only while the websocket is down; sleeps in hidden tabs
     stopPoll = API.poll(3000, fetchFresh, () => API.chUp(chan));
     stopVisible = API.onVisible(fetchFresh);
 

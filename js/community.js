@@ -1,6 +1,4 @@
-// ============================================================
-//  Сообщество: форум, клубы, блог
-// ============================================================
+// Community: forum, clubs, blog.
 (function () {
   "use strict";
 
@@ -8,7 +6,7 @@
     <div class="empty">${text || "Только для авторизованных"} ·
       <a href="#/login">войти</a> / <a href="#/signup">регистрация</a></div>`;
 
-  // ---------- модерация (creator/admin; окончательная проверка — в БД) ----------
+  // moderation (creator/admin; final checks live in the database)
   async function modProfile() {
     const me = App.user || await API.user();
     if (!me) return null;
@@ -16,7 +14,7 @@
     return await API.profile(me.id);
   }
   const isMod = (pr) => !!pr && (pr.role === "creator" || pr.role === "admin");
-  // кнопки у сообщения чата клуба (как в общем чате)
+  // moderator buttons on club chat messages, as in the global chat
   function clubModActionsHtml(m) {
     if (!U.amMod()) return "";
     if (!m.user_id || (App.user && m.user_id === App.user.id)) return "";
@@ -26,7 +24,7 @@
     </span>`;
   }
 
-  // ================= ФОРУМ =================
+  // Forum
   const ForumPage_render = async function (container) {
     const me = await API.user();
     const my = await modProfile();
@@ -136,7 +134,7 @@
     const tDel = U.qs("#t-del");
     if (tDel) tDel.addEventListener("click", async () => {
       if (mod && t.author_id !== me.id) {
-        // модераторское удаление чужой темы — двойное подтверждение
+        // deleting someone else's thread asks for a double confirmation
         if (!(await U.confirmDanger("Удалить тему со всеми ответами?", "", "Удалить"))) return;
         const { error } = await API.adminDeleteThread(threadId);
         if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
@@ -157,7 +155,7 @@
     return () => {};
   };
 
-  // ================= КЛУБЫ =================
+  // Clubs
   const ClubsPage_render = async function (container) {
     const me = await API.user();
     const mod = isMod(await modProfile());
@@ -215,7 +213,7 @@
     const isOwner = me && c.owner_id === me.id;
     const canChat = !!(me && myMember);
 
-    // история чата клуба (RLS: только участники)
+    // club chat history (RLS: members only)
     let msgs = [];
     if (canChat) {
       const { data } = await API.sb.from("club_chat")
@@ -305,7 +303,7 @@
       if (error) U.toast(error.message, "error"); else App.route();
     }));
 
-    // ---------- чат клуба ----------
+    // club chat
     const chans = [];
     const stops = [];
     if (canChat) {
@@ -313,12 +311,11 @@
       const names = {};
       const roles = {};
       const seen = new Set();
-      let pending = [];            // оптимистичные свои сообщения: [{body, el}]
+      let pending = [];            // own optimistic messages: [{body, el}]
       (members || []).forEach(m => { if (m.p) { names[m.user_id] = m.p.username; roles[m.user_id] = m.p.role || "user"; } });
       const addMsg = (m) => {
-        if (seen.has(m.id)) return; // realtime + poll могут дублировать
-        // своё сообщение могло быть показано оптимистично раньше RPC:
-        // совпало — считаем подтверждённым, элемент уже стоит
+        if (seen.has(m.id)) return; // realtime and polling may duplicate
+        // own message already shown optimistically: treat the match as confirmation
         if (m.user_id === me.id) {
           const i = pending.findIndex(p => p.body === m.body);
           if (i >= 0) {
@@ -337,7 +334,7 @@
         log.scrollTop = log.scrollHeight;
       };
       msgs.forEach(addMsg);
-      // модерация чата клуба: удалить сообщение / мут автора (делегирование)
+      // club chat moderation: delete a message or mute the author (delegated)
       log.addEventListener("click", async (e) => {
         const del = e.target.closest("[data-adel]");
         const mute = e.target.closest("[data-amute]");
@@ -369,7 +366,7 @@
         if (!body) return;
         inp.value = "";
         log.querySelector(".empty") && log.querySelector(".empty").remove();
-        // ОПТИМИСТИЧНО: сообщение появляется сразу, RPC — в фоне
+        // optimistic: show instantly, RPC in the background
         const nm = (App.profile && App.profile.username) || names[me.id] || "Вы";
         const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.linkify(body)}</div>`);
         log.appendChild(tmp);
@@ -385,15 +382,14 @@
           inp.value = body;
           return;
         }
-        if (res && res.message) seen.add(res.message.id); // realtime не задублирует
+        if (res && res.message) seen.add(res.message.id); // no duplicates later
         const i = pending.indexOf(pend);
         if (i >= 0) pending.splice(i, 1);
       };
       U.qs("#club-chat-send").addEventListener("click", send);
       U.qs("#club-chat-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
-      // доза-fetch новых сообщений: общий для поллинга-фоллбэка,
-      // переподключения websocket и возврата во вкладку
+      // fresh fetch shared by fallback polling, reconnects, and tab returns
       async function fetchFresh() {
         const { data: fresh } = await API.sb.from("club_chat")
           .select("*, p:profiles(username)").eq("club_id", clubId)
@@ -420,14 +416,14 @@
         _wasDown = status !== "SUBSCRIBED";
       });
       chans.push(chatChan);
-      // fallback-поллинг — только когда websocket не поднялся; в скрытой вкладке спит
+      // fallback polling only while the websocket is down; sleeps in hidden tabs
       stops.push(API.poll(4000, fetchFresh, () => API.chUp(chatChan)));
       stops.push(API.onVisible(fetchFresh));
     }
     return function cleanup() { stops.forEach(s => s()); chans.forEach(API.unsubscribe); };
   };
 
-  // ================= БЛОГ =================
+  // Blog
   const BlogPage_render = async function (container) {
     const me = await API.user();
     container.innerHTML = `

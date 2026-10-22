@@ -1,7 +1,5 @@
-// ============================================================
-//  Страница партии: доска, часы (по серверному времени),
-//  авто-заявка флага, чат, действия.
-// ============================================================
+// Game page: board, server-backed clocks, automatic flag claims,
+// chat, and player actions.
 (function () {
   "use strict";
 
@@ -21,10 +19,10 @@
     cheat: "Соперник систематически отправлял нелегальные ходы"
   };
 
-  // Локальная генерация легальных ходов (chess.js 1.4.0, vendored).
-  // Сервер остаётся источником истины: он валидирует отправленный ход и
-  // считает результат партии. Список ходов нужен только интерфейсу
-  // (подсветка/премувы) — больше не запрашиваем его с сервера.
+  // Local legal-move generation with the vendored chess.js 1.4.0.
+  // The server remains the source of truth: it validates submitted moves
+  // and decides the result. The move list only feeds the UI
+  // (highlights and premoves) and is never fetched from the server.
   function computeLegal(g) {
     if (!g || g.status !== "active" || !window.Chess) return [];
     try {
@@ -44,17 +42,17 @@
       stm: "w", oppDeadline: null, chatEl: null,
       chatInit: false, chatSub: false, gameSub: false,
       replay: null, replayPly: null, keyHandler: null,
-      premove: null,           // { from, to, promo } — ход «в уме» (uci-имена клеток)
-      flagRetryAt: null,       // отсрочка повторной заявки флага после not_out
+      premove: null,           // { from, to, promo } staged move (square names)
+      flagRetryAt: null,       // retry delay for a flag claim after not_out
       chatSeen: new Set(), lastChatTs: null,
-      chatPending: [],         // оптимистичные сообщения: [{body, el}]
-      rtUp: false,             // websocket канала партии жив → поллинг не нужен
+      chatPending: [],         // optimistic messages: [{body, el}]
+      rtUp: false,             // game channel websocket up: polling not needed
       stopVisible: null
     };
 
     container.innerHTML = `<div class="card center"><span class="spinner"></span> Загрузка партии…</div>`;
 
-    // ---------- применение состояния ----------
+    // state application
     function derive(g) {
       const fen = g.fen || "";
       S.stm = (fen.split(" ")[1] || "w");
@@ -81,19 +79,19 @@
       const oldLen = S.g ? (S.g.moves || []).length : 0;
       S.g = g;
       S.legal = computeLegal(g);
-      S.flagRetryAt = null;   // новое состояние — старая отсрочка флага не нужна
+      S.flagRetryAt = null;   // fresh state: drop the old claim delay
       S.myColor = !me ? null : (g.white === me.id ? "white" : (g.black === me.id ? "black" : null));
       derive(g);
-      // партия кончилась / откат — премув больше не имеет смысла
+      // game over or rollback: the staged premove is meaningless now
       if (g.status !== "active" || !S.myColor) clearPremoveState(false);
-      // смотрим историю (перемотка) — доску не дёргаем, обновляем только список ходов
+      // replay browsing: leave the board alone, refresh the move list only
       if (S.replayPly != null) { movesList(); return; }
       drawGame();
 
-      // звук хода соперника (свой ход озвучивается в onMove)
+      // play the opponent move sound (own moves sound in onMove)
       const mv = g.moves || [];
       if (fromRemote && mv.length > oldLen && S.myColor) {
-        const lastPlyWhite = mv.length % 2 === 1; // 1-й полуход — белые
+        const lastPlyWhite = mv.length % 2 === 1; // odd half-move count: white moved
         const oppMoved = (S.myColor === "white") ? !lastPlyWhite : lastPlyWhite;
         if (oppMoved) {
           const san = mv[mv.length - 1].s || "";
@@ -101,13 +99,13 @@
         }
       }
 
-      // ПРЕМУВ: соперник сходил — пробуем сыграть заряженный ход
+      // premove: the opponent moved, try the staged move
       tryPremove();
 
-      // чат становится доступен, как только я стал участником активной партии
+      // chat unlocks as soon as I am a participant of the active game
       if (me && S.myColor && !S.chatInit) initChat();
 
-      // партия завершилась на наших глазах — включаем перемотку
+      // the game just finished: enable replay
       if ((g.status === "finished" || g.status === "aborted") && !S.replay) initReplay();
 
       if (!wasOver && g.status === "finished" || g.status === "aborted") {
@@ -115,9 +113,9 @@
       }
     }
 
-    // ---------- премувы ----------
+    // premoves
     function setPremoveState(p) {
-      S.premove = p; // { from, to, promo } | null (имена клеток)
+      S.premove = p; // { from, to, promo } | null (square names)
       S.board.setPremove(p);
       drawStatus();
     }
@@ -135,16 +133,16 @@
       }
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       if (!myTurn) return;
-      // премув отправляется СРАЗУ и БЕЗ локальной проверки легальности:
-      // интерфейс не тормозит, окончательный арбитр — сервер. Нелегальный
-      // ход сервер отклонит — отрисовка откатится к состоянию базы.
-      clearPremoveState(false);           // снять подсветку заранее
+      // the premove is sent immediately with no local legality check;
+      // the server is the final judge and rejects illegal moves, after
+      // which the board redraws from the database state.
+      clearPremoveState(false);           // clear the highlight early
       onMove(p.from, p.to, p.promo, { isPremove: true });
     }
     async function onPremove(from, to, promo) {
       if (!S.myColor || !S.g || S.g.status !== "active") return;
       setPremoveState({ from, to, promo: promo || null });
-      // если ход уже мой (гонка с тикером) — сыграть немедленно
+      // if it is already my turn (ticker race) play immediately
       tryPremove();
     }
 
@@ -154,7 +152,7 @@
       await applyState(data.game, true);
     }
 
-    // ---------- разметка ----------
+    // layout
     const root = U.el(`<div class="game-layout">
       <div>
         <div class="player-bar" id="pb-top"></div>
@@ -200,7 +198,7 @@
       S.board.flip();
     });
 
-    // ---------- отрисовка ----------
+    // rendering
     function playerBar(elId, color) {
       const g = S.g;
       const pid = color === "white" ? g.white : g.black;
@@ -221,7 +219,7 @@
     }
 
     async function loadNames() {
-      // подтянуть профили обоих игроков (публичны)
+      // fetch both player profiles (public)
       const ids = [S.g.white, S.g.black].filter(Boolean);
       if (!ids.length) return;
       const { data } = await API.sb.from("profiles").select("id,username,rating,is_banned").in("id", ids);
@@ -251,14 +249,13 @@
       if (S.replayPly == null || S.replayPly >= mv.length) list.scrollTop = list.scrollHeight;
     }
 
-    // ---------- перемотка завершённой партии (локально, chess.js) ----------
+    // replay of a finished game (local, chess.js)
     function lastUci() {
       const mv = S.g.moves || [];
       return mv.length ? mv[mv.length - 1].u : null;
     }
     function buildReplayData(g) {
-      // позиции после каждого полухода считает chess.js на клиенте —
-      // RPC get_replay больше не нужен
+      // positions after each half-move are computed client-side with chess.js
       const fens = [];
       try {
         const c = new window.Chess(g.start_fen);
@@ -329,7 +326,7 @@
       if (!mv.length) return null;
       const san = mv[mv.length - 1].s || "";
       if (!/[+#]$/.test(san)) return null;
-      // король стороны, чей ход
+      // king of the side to move
       const target = S.stm === "w" ? "K" : "k";
       const rows = S.g.fen.split(" ")[0].split("/");
       for (let r = 0; r < 8; r++) {
@@ -415,7 +412,7 @@
         else if (g.result === "0-1") txt = "0–1 · победа чёрных";
         else txt = "½–½";
         const rd = g.rating_delta || null;
-        // дельта пула (блиц/рапид/классика) приоритетнее общей
+        // the pool rating delta takes precedence over the global one
         const myDelta = rd && me ? (g.white === me.id ? rd.white : rd.black) : null;
         const myDeltaClass = rd && me ? (g.white === me.id ? rd.white_class : rd.black_class) : null;
         const shownDelta = myDeltaClass != null ? myDeltaClass : myDelta;
@@ -431,7 +428,7 @@
             `<p class="small center good">Соперник заблокирован навсегда за попытку обмана.</p>` : ""}`;
         return;
       }
-      // active
+      // active game
       const myTurn = S.myColor && ((S.stm === "w") === (S.myColor === "white"));
       const prenote = S.premove
         ? `<div class="draw-box premove-box"><span>Премув: <b>${U.esc(S.premove.from)}→${U.esc(S.premove.to)}${S.premove.promo ? "=" + S.premove.promo.toUpperCase() : ""}</b> — сыграет после хода соперника · отмена — ПКМ по доске</span>
@@ -508,17 +505,16 @@
       });
     }
 
-    // ---------- действия ----------
+    // actions
     async function act(fn, ...args) {
       const { data, error } = await fn(...args);
       if (error) { U.toast(error.message, "error"); await refetch(); return; }
       if (data && data.game) await applyState(data.game, false);
     }
 
-    // ---------- ОПТИМИСТИЧНЫЙ ХОД ----------
-    // Ход отрисовывается СРАЗУ (позицию пересчитывает chess.js локально),
-    // RPC уходит в фоне. Сервер — окончательный арбитр: если он отклонил
-    // ход, refetch() возвращает доску к состоянию базы.
+    // Optimistic move: rendered immediately (chess.js recomputes the
+    // position locally) while the RPC runs in the background. The server
+    // is the final judge; on rejection refetch() restores the board.
     function applyLocalMove(uci) {
       const g = S.g;
       if (!g || g.status !== "active" || !window.Chess) return null;
@@ -557,18 +553,17 @@
       if (S.pendingMove) return;
       const uci = from + to + (promo || "");
       const isPremove = !!(opts && opts.isPremove);
-      // обычный ход: рисуем мгновенно, если chess.js считает его легальным;
-      // премув (isPremove): без проверок вообще — решает сервер
+      // normal move: render instantly when chess.js accepts it; premoves skip checks entirely
       if (!isPremove && !S.legal.includes(uci)) return;
       S.pendingMove = true;
-      const local = applyLocalMove(uci);   // мгновенная отрисовка
-      if (!local) drawStatus();            // локально не отрисовалось — покажем «отправляется»
+      const local = applyLocalMove(uci);   // instant render
+      if (!local) drawStatus();            // nothing rendered locally: show "sending"
       const { data, error } = await API.makeMove(S.g.id, uci);
       S.pendingMove = false;
       if (error || (data && data.ok === false)) {
         const msg = (error && error.message) || (data && data.error) || "Ход отклонён сервером";
         U.toast(msg, "error");
-        await refetch();                   // ОТКАТ к серверному состоянию
+        await refetch();                   // roll back to the server state
         return;
       }
       if (data && data.game && API.stateKey(data.game) !== API.stateKey(S.g)) {
@@ -589,8 +584,7 @@
         return;
       }
       if (data && data.status === "not_out") {
-        // по СЕРВЕРНЫМ часам время соперника ещё не вышло: никаких санкций,
-        // просто повторим позже (клиентские часы могли спешить)
+        // by server time the opponent clock is not out yet: retry later, no penalties
         S.flagClaimed = false;
         S.flagRetryAt = ServerTime.now() + 2000;
         return;
@@ -598,11 +592,11 @@
       if (data && data.game) await applyState(data.game, false);
     }
 
-    // ---------- тикер часов ----------
+    // clock ticker
     const ticker = setInterval(() => {
       if (!S.g || S.destroyed) return;
       if (S.g.status !== "active") return;
-      // обновить часы
+      // refresh the clocks
       for (const color of ["white", "black"]) {
         const el = U.qs(`[data-clock=${color}]`, root);
         if (!el) continue;
@@ -614,9 +608,9 @@
         const isTurn = (S.stm === ch);
         el.classList.toggle("active", isTurn);
       }
-      // авто-заявка флага: часы соперника кончились, консервативное время
-      // >= дедлайн + запас. Если сервер ответил not_out — повторяем с
-      // отсрочкой, без санкций (бан за ложное заявление убран).
+      // automatic flag claim: the opponent clock expired and the
+      // conservative estimate passed deadline plus margin. A not_out
+      // answer simply retries after a delay.
       if (S.myColor && !S.flagClaimed && !S.pendingMove) {
         const oppChar = S.myColor === "white" ? "b" : "w";
         if (S.stm === oppChar && S.stmDeadline != null &&
@@ -625,7 +619,7 @@
           doClaimFlag(false);
         }
       }
-      // подсветить кнопку флага
+      // highlight the flag button
       const flagBtn = U.qs("#act-flag", root);
       if (flagBtn) {
         const oppChar = S.myColor === "white" ? "b" : "w";
@@ -633,13 +627,12 @@
       }
     }, 100);
 
-    // ---------- чат ----------
+    // game chat
     const chatCard = U.qs("#chat-card", root);
     const chatLog = U.qs("#chat-log", root);
     function chatMsg(m) {
-      if (S.chatSeen.has(m.id)) return; // realtime + poll могут дублировать
-      // своё сообщение могло быть показано оптимистично раньше ответа RPC:
-      // совпало — считаем подтверждённым (id в seen), элемент уже стоит
+      if (S.chatSeen.has(m.id)) return; // realtime and polling may duplicate
+      // own message already shown optimistically: treat the match as confirmation
       if (me && m.user_id === me.id) {
         const i = S.chatPending.findIndex(p => p.body === m.body);
         if (i >= 0) {
@@ -673,7 +666,7 @@
       if (data && data.length) S.lastChatTs = U.parseTs(data[data.length - 1].created_at);
     }
     async function initChat() {
-      if (S.chatInit || !me || !S.g || !S.myColor) return; // чат только для участников (RLS и так режет)
+      if (S.chatInit || !me || !S.g || !S.myColor) return; // participants only (RLS also enforces)
       S.chatInit = true;
       chatCard.style.display = "";
       subscribeChatChan();
@@ -692,7 +685,7 @@
       const body = inp.value.trim();
       if (!body) return;
       inp.value = "";
-      // ОПТИМИСТИЧНО: сообщение появляется мгновенно, RPC — в фоне
+      // optimistic: the message appears instantly, the RPC runs in the background
       const nm = (myProfile && myProfile.username) || "Вы";
       const tmp = U.el(`<div class="chat-msg"><a class="user-link" href="#/profile/${me.id}">${U.esc(nm)}:</a> ${U.esc(body)}</div>`);
       chatLog.appendChild(tmp);
@@ -701,7 +694,7 @@
       S.chatPending.push(pend);
       const { data, error } = await API.sendChat(S.g.id, body);
       if (error) {
-        // не ушло — убираем оптимистичное, возвращаем текст
+        // failed: remove the optimistic entry and restore the text
         tmp.remove();
         const i = S.chatPending.indexOf(pend);
         if (i >= 0) S.chatPending.splice(i, 1);
@@ -709,46 +702,44 @@
         inp.value = body;
         return;
       }
-      if (data && data.message) S.chatSeen.add(data.message.id); // realtime/poll не задублируют
+      if (data && data.message) S.chatSeen.add(data.message.id); // no duplicates later
       const i = S.chatPending.indexOf(pend);
       if (i >= 0) S.chatPending.splice(i, 1);
     }
 
-    // ---------- realtime + умный fallback-поллинг ----------
-    // Realtime — мгновенная доставка. Поллинг тикает ТОЛЬКО когда
-    // websocket не поднялся (сеть/прокси) — иначе он отключён вовсе.
-    // Возврат во вкладку — один тихий доза-fetch: перерисовки всей
-    // страницы нет, DOM трогается только если что-то реально изменилось.
+    // Realtime plus fallback polling. Polling ticks only while the
+    // websocket is down; otherwise it stays off. Returning to the tab
+    // does one quiet fetch; the DOM changes only on real updates.
     async function pollOnce() {
       if (S.destroyed || !S.g) return;
-      if (S.pendingMove) return; // свой ход уже летит — не мешаем
+      if (S.pendingMove) return; // own move in flight: do not interfere
       try {
         const { data } = await API.gameState(gameId);
         if (!data || !data.ok || S.destroyed) return;
         if (API.stateKey(data.game) !== API.stateKey(S.g)) {
           applyState(data.game, true);
         }
-      } catch (e) { /* сеть моргнула — попробуем в следующий тик */ }
+      } catch (e) { /* transient network issue; retry next tick */ }
     }
     const pollTimer = API.poll(2500, pollOnce, () => S.rtUp);
     const chatPollTimer = API.poll(3000, fetchNewChat, () => S.chatUp);
     S.stopVisible = API.onVisible(() => {
-      pollOnce();          // тихо доза-fetch при возврате во вкладку
-      fetchNewChat();      // дедуп chatSeen: лишнего рендера не будет
+      pollOnce();          // quiet fetch on tab return
+      fetchNewChat();      // chatSeen dedup prevents extra renders
     });
-    // отладочный режим ?nort=1 — отключить realtime (проверка чистого поллинга)
+    // debug mode ?nort=1 disables realtime to test pure polling
     const NO_RT = /(?:^|[?&])nort=1/.test(location.search);
 
     function subscribe() {
       if (NO_RT || !S.g || S.gameSub) return;
       S.gameSub = true;
       S.chans.push(API.subscribeGame(S.g.id, (row) => {
-        if (API.stateKey(row) === API.stateKey(S.g)) return; // дубликат после poll
-        // легальные ходы считаем локально (chess.js) — refetch не нужен
+        if (API.stateKey(row) === API.stateKey(S.g)) return; // duplicate after poll
+        // legal moves are computed locally, no refetch needed
         applyState(row, true);
       }, (status) => {
         S.rtUp = (status === "SUBSCRIBED");
-        if (S.rtUp && S._rtWasDown) pollOnce(); // переподключение — доза-fetch упущенного
+        if (S.rtUp && S._rtWasDown) pollOnce(); // refetch after reconnect
         S._rtWasDown = !S.rtUp;
       }));
     }
@@ -765,7 +756,7 @@
       }));
     }
 
-    // ---------- старт ----------
+    // startup
     const { data, error } = await API.gameState(gameId);
     if (error || !data || !data.ok) {
       container.innerHTML = `<div class="card center"><h2>Партия не найдена</h2>
@@ -777,7 +768,7 @@
     await loadNames();
     await initChat();
     subscribe();
-    initReplay(); // реплей для завершённых партий (локально, без RPC)
+    initReplay(); // replay for finished games, local and RPC-free
 
     return function cleanup() {
       S.destroyed = true;

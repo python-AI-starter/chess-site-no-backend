@@ -1,15 +1,11 @@
-// ============================================================
-//  Роутер + каркас (навбар, сессия, баннер бана)
-//  Страница рендерится МГНОВЕННО (до сетевых вызовов), сессия
-//  и время сервера подтягиваются в фоне. Подсветка активного
-//  пункта меню — чистый клиент, синхронно на каждый переход.
-// ============================================================
+// Router and shell: navbar, session, ban banner. Pages render instantly
+// before any network call; session and server time arrive in the
+// background. Active menu highlighting is synchronous per navigation.
 (function () {
   "use strict";
 
-  // ---------- тема (светлая/тёмная) ----------
-  // Применение — мгновенно (инлайн-скрипт в <head> до отрисовки),
-  // тут только переключатель и сохранение выбора.
+  // Theme: applied instantly by the inline head script, so here is only
+  // the toggle and persistence.
   function applyTheme(t) {
     document.documentElement.classList.toggle("dark", t === "dark");
     const b = U.qs("#theme-toggle");
@@ -27,7 +23,7 @@
     profile: null,
     _routedOnce: false,
 
-    // мгновенная подсветка активного пункта меню (без сети)
+    // instant active-menu highlight without network
     updateNav() {
       const page = (location.hash || "#/").replace(/^#\//, "").split("/")[0] || "lobby";
       U.qsa("#nav-links a").forEach(a =>
@@ -40,8 +36,7 @@
       const box = U.qs("#nav-user");
       const ban = U.qs("#ban-banner");
       if (this.profile) {
-        // перерисовывать навбар только при реальных изменениях — без мерцания
-        // при возврате во вкладку (supabase шлёт повторные SIGNED_IN/TOKEN_REFRESHED)
+        // redraw the navbar only on real changes to avoid auth-event flicker
         const sig = [this.profile.id, this.profile.username, this.profile.rating,
                      this.profile.is_banned ? 1 : 0, this.profile.role || "user"].join(":");
         if (box.dataset.sig !== sig) {
@@ -73,7 +68,7 @@
       }
     },
 
-    // непрочитанные личные сообщения -> бейдж в меню
+    // unread DM count shown as a navbar badge
     async refreshDmBadge() {
       const b = U.qs("#dm-badge");
       if (!b) return;
@@ -86,12 +81,8 @@
       if (b.textContent !== txt) { b.textContent = txt; b.classList.toggle("hidden", !count); }
     },
 
-    // ---------- ЗАЩИТА ОТ ПЕРЕРИСОВКИ ПРИ ВОЗВРАТЕ ВО ВКЛАДКУ ----------
-    // supabase-js при каждом visibilitychange->visible вызывает
-    // _recoverAndRefresh() и ПОВТОРНО эмитит SIGNED_IN/TOKEN_REFRESHED.
-    // Раньше на SIGNED_IN мы делали App.route() — вся страница
-    // перерисовывалась при каждом переключении вкладок. Теперь полное
-    // обновление происходит ТОЛЬКО при реальной смене пользователя.
+    // supabase-js re-emits SIGNED_IN/TOKEN_REFRESHED on every tab focus;
+    // a full rerender happens only when the user identity really changes.
     handleAuthEvent(evt, session) {
       const uid = session && session.user ? session.user.id : null;
       const prev = this._authUid;
@@ -100,25 +91,24 @@
         (evt === "SIGNED_OUT" && prev != null) ||
         ((evt === "SIGNED_IN" || evt === "USER_UPDATED") && uid !== prev && prev !== undefined);
       if (!real) {
-        startHeartbeat(); // просто убедиться, что пульс жив
+        startHeartbeat(); // keep the heartbeat alive
         return;
       }
       API.invalidateBlocked();
       this.refreshNav().then(() => {
         startHeartbeat();
         this.refreshDmBadge();
-        this.route(); // реальный вход/выход — страница обязана перерисоваться
+        this.route(); // a real sign-in/out requires a rerender
       });
     },
 
     async route() {
-      // ссылка из письма несёт сессию в хэше (#access_token=...) — это не
-      // маршрут: показываем лобби, пока supabase-js не подхватит сессию
+      // email links carry the session in the hash; show the lobby while supabase-js picks it up
       if (/^#(access_token|error|error_description)=/.test(location.hash)) {
         location.hash = "#/";
         return;
       }
-      this.updateNav(); // подсветка — сразу и синхронно
+      this.updateNav(); // highlight immediately and synchronously
       const app = U.qs("#app");
       if (this.cleanup) { try { this.cleanup(); } catch (e) {} this.cleanup = null; }
       const hash = location.hash || "#/";
@@ -138,7 +128,7 @@
         else if (page === "forum" && !arg) await wrap(Community.forum);
         else if (page === "forum") await wrap(Community.thread, arg);
         else if (page === "clubs" && !arg) await wrap(Community.clubs);
-        else if (page === "clubs" || page === "club") await wrap(Community.club, arg); // «club» — алиас старых ссылок
+        else if (page === "clubs" || page === "club") await wrap(Community.club, arg); // "club" stays as a legacy alias
         else if (page === "blog" && !arg) await wrap(Community.blog);
         else if (page === "blog" && arg === "new") await wrap(Community.blogNew);
         else if (page === "blog") await wrap(Community.blogPost, arg);
@@ -156,7 +146,7 @@
 
   window.addEventListener("hashchange", () => App.route());
   window.App = App;
-  // ---------- онлайн-пульс: heartbeat раз в 30 с ----------
+  // Online heartbeat every 30 s
   let hbTimer = null;
   function startHeartbeat() {
     if (hbTimer) { clearInterval(hbTimer); hbTimer = null; }
@@ -167,31 +157,30 @@
   }
 
   (async function init() {
-    // тема — до первого рендера (инлайн в index.html), здесь только кнопка
+    // theme is applied before first render; only the button lives here
     applyTheme(document.documentElement.classList.contains("dark") ? "dark" : "light");
     const tbtn = U.qs("#theme-toggle");
     if (tbtn) tbtn.addEventListener("click", toggleTheme);
 
-    // переход по ссылке подтверждения почты — автовход без логина
+    // arriving via a confirmation email link signs in without the login form
     const viaEmailLink = /access_token=/.test(location.hash);
 
-    // 1) мгновенный рендер страницы — без ожидания сети
+    // instant page render without waiting for the network
     App.route();
-    // 2) сессия и серверное время — в фоне
+    // session and server time load in the background
     ServerTime.sync().catch(() => {});
     await App.refreshNav();
     startHeartbeat();
-    // если на мгновенный рендер гость смотрел «гостевую» страницу,
-    // а сессия нашлась — перерисовать один раз уже с известным входом
+    // if the instant render was a guest view but a session exists, rerender once
     if (App.user && (location.hash === "" || location.hash === "#/")) App.route();
     if (viaEmailLink && App.user) {
       U.toast("Email подтверждён — вы вошли автоматически", "good");
       try { history.replaceState(null, "", location.pathname + location.search + "#/"); } catch (e) {}
     }
-    // 3) бейдж непрочитанных ЛС — обновлять по кругу (в фоне — спит)
+    // unread DM badge refreshes periodically and idles in the background
     App.refreshDmBadge();
     API.poll(15000, () => App.refreshDmBadge());
-    // возврат во вкладку — тихо обновить бейдж (без перерисовки страницы)
+    // quiet badge refresh when returning to the tab
     API.onVisible(() => App.refreshDmBadge());
     API.onAuth((evt, session) => App.handleAuthEvent(evt, session));
   })();

@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9820;</text></svg>">
 <link rel="stylesheet" href="css/style.css?v=7">
 <script>
-// тема до первой отрисовки — без вспышки светлого
+// apply the saved theme before first paint to avoid a light flash
 try {
   if ((localStorage.getItem("ladya-theme") || "light") === "dark")
     document.documentElement.classList.add("dark");

@@ -1,7 +1,5 @@
-// ============================================================
-//  Лобби: быстрый поиск, вызовы по ссылке, мои партии,
-//  открытые вызовы (видны и гостям) и ОБЩИЙ ЧАТ на главной.
-// ============================================================
+// Lobby: quick pairing, link challenges, own games, open challenges
+// (visible to guests too), and the global chat.
 (function () {
   "use strict";
 
@@ -85,15 +83,14 @@
       </div>
     `;
 
-    // ---------- общий чат (для всех: гости читают) ----------
+    // global chat; guests read only
     const gcCleanup = Social.globalChat(U.qs("#global-chat"));
     let disposed = false;
     const cleanupFns = [() => { if (!disposed) gcCleanup(); }];
 
     if (!me) {
-      // гости: открытые вызовы только для просмотра.
-      // Поллинг БЕЗ привязки к realtime (чтобы вызовы были видны всегда),
-      // realtime у гостей не используется — окно свежести по серверному времени.
+      // guests see open challenges read-only; polling always runs (no
+      // realtime for guests) with a server-time freshness window.
       async function loadOpenGuest() {
         const box = U.qs("#open-list");
         if (!box) return;
@@ -124,19 +121,19 @@
           ? `<table class="lobby-list"><tr><th>Игрок</th><th>Контроль</th><th>Тип</th><th></th></tr>${rows.join("")}</table>`
           : `<div class="empty">Пока нет открытых вызовов</div>`;
         const sig = (data || []).map(g => g.id + g.status).join(",");
-        if (box.dataset.sig === sig && box.dataset.err !== "1") return; // ничего не изменилось — не мерцаем
+        if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw
         box.dataset.sig = sig;
         box.dataset.err = "0";
         box.innerHTML = html;
       }
       loadOpenGuest();
-      const t = API.poll(4000, loadOpenGuest); // всегда тикает: без realtime у гостей
+      const t = API.poll(4000, loadOpenGuest); // always ticks for guests
       const stopVis = API.onVisible(loadOpenGuest);
       cleanupFns.push(() => { t(); stopVis(); });
       return function cleanup() { cleanupFns.forEach(f => f()); };
     }
 
-    // ---------- мои активные партии ----------
+    // own active games
     async function loadMyGames() {
       const box = U.qs("#my-games");
       if (!box) return;
@@ -148,7 +145,7 @@
         .limit(8);
       if (!data || !data.length) { box.classList.add("hidden"); return; }
       const sig = data.map(g => g.id + g.status).join(",");
-      if (box.dataset.sig === sig) return; // без изменений — не мерцаем
+      if (box.dataset.sig === sig) return; // unchanged: skip redraw
       box.dataset.sig = sig;
       box.classList.remove("hidden");
       box.innerHTML = `<h2>Мои партии</h2>` + data.map(g =>
@@ -159,7 +156,7 @@
     }
     loadMyGames();
 
-    // ---------- быстрый поиск ----------
+    // quick pairing
     let seeking = false;
     let seekTimer = null;
     async function startSeek(ms, inc) {
@@ -173,7 +170,7 @@
       const { data, error } = await API.quickPair(ms, inc);
       if (error) { seeking = false; st.innerHTML = ""; U.toast(error.message, "error"); return; }
       if (data) { location.hash = `#/game/${data}`; return; }
-      // ждём пару: опрос своих активных партий
+      // wait for the pair by polling own active games
       seekTimer = setInterval(async () => {
         const { data: games } = await API.sb.from("games")
           .select("id").or(`white.eq.${me.id},black.eq.${me.id}`)
@@ -200,7 +197,7 @@
       startSeek(min * 60000, inc * 1000);
     });
 
-    // ---------- вызов ----------
+    // challenge creation
     U.qs("#ch-create").addEventListener("click", async () => {
       const min = Math.max(1, Number(U.qs("#ch-min").value) || 10);
       const inc = Math.max(0, Number(U.qs("#ch-inc").value) || 0);
@@ -211,11 +208,9 @@
       location.hash = `#/game/${data}`;
     });
 
-    // ---------- открытые вызовы ----------
-    // Надёжность прежде всего: список тикает по realtime (мгновенно)
-    // И по обычному поллингу даже при живом websocket — тогда вызовы
-    // гарантированно отображаются у всех и у автора (если realtime
-    // молчит или событие потерялось, список всё равно обновится).
+    // open challenges
+    // Reliability first: the list refreshes via realtime and via polling
+    // even while the websocket is up, so challenges always show up.
     async function loadOpen() {
       const box = U.qs("#open-list");
       if (!box) return;
@@ -251,7 +246,7 @@
         </tr>`;
         });
       const sig = visible.map(g => g.id).join(",");
-      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // без изменений — не мерцаем и не перецепляем
+      if (box.dataset.sig === sig && box.dataset.err !== "1") return; // unchanged: skip redraw and rebinding
       box.dataset.sig = sig;
       box.dataset.err = "0";
       box.innerHTML = rows.length
@@ -270,10 +265,10 @@
     let rtDebounce = null, _wasDown = false, rtChan = null;
     const rtRefresh = () => { clearTimeout(rtDebounce); rtDebounce = setTimeout(() => { loadOpen(); loadMyGames(); }, 250); };
     rtChan = API.subscribeInserts("games", null, rtRefresh, (status) => {
-      if (status === "SUBSCRIBED" && _wasDown) { loadOpen(); loadMyGames(); } // доза-fetch после reconnect
+      if (status === "SUBSCRIBED" && _wasDown) { loadOpen(); loadMyGames(); } // refetch after reconnect
       _wasDown = status !== "SUBSCRIBED";
     }, ["INSERT", "UPDATE"]);
-    // поллинг ВСЕГДА (не гейтится realtime-ом): вызовы видны гарантированно
+    // polling always runs so challenges stay visible
     const openTimer = API.poll(4000, loadOpen);
     const myTimer = API.poll(6000, loadMyGames);
     const stopVisible = API.onVisible(() => { loadOpen(); loadMyGames(); });

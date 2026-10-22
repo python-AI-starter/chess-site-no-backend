@@ -1,7 +1,5 @@
-// ============================================================
-//  Реплей партии: перемотка ходов по FEN-ам из get_replay().
-//  Кнопки |< < ▶ > >|, кликабельный список ходов, стрелки клавиатуры.
-// ============================================================
+// Game replay: step through moves using the FEN list, with control
+// buttons, a clickable move list, and keyboard arrows.
 (function () {
   "use strict";
 
@@ -11,7 +9,7 @@
       this.root = container;
       this.data = opts.replay;
       this.total = (this.data.fens || []).length;
-      this.ply = this.total;              // начинаем с последней позиции
+      this.ply = this.total;              // start at the final position
       this._timer = null;
 
       this.root.innerHTML = `
@@ -43,7 +41,7 @@
         });
       });
 
-      // кликабельный список ходов
+      // clickable move list
       const mv = this.data.moves || [];
       const rows = [];
       for (let i = 0; i < mv.length; i += 2) {
@@ -78,8 +76,7 @@
     }
 
     goto(ply, keepPlay) {
-      // keepPlay=true — переход ДЕЛАЕТ автопрокрутка: таймер не гасим,
-      // иначе она остановится после первого же полухода (прежний баг)
+      // keepPlay=true means the autoplay itself is navigating: keep the timer
       if (!keepPlay) this.stopPlay();
       this.ply = Math.max(0, Math.min(this.total, ply));
       this.render();
@@ -89,10 +86,10 @@
       if (this.ply >= this.total) this.ply = 0;
       const btn = U.qs('[data-rp="play"]', this.root);
       if (btn) { btn.innerHTML = "&#9646;&#9646; Пауза"; btn.title = "Остановить автопрокрутку"; }
-      this.render(); // сразу показать стартовую позицию (бывает ply=0)
+      this.render(); // show the start position immediately when ply=0
       this._timer = setInterval(() => {
         if (this.ply >= this.total) { this.stopPlay(); return; }
-        this.goto(this.ply + 1, true); // НЕ гасим таймер — продолжаем автопрокрутку
+        this.goto(this.ply + 1, true); // keep the timer running
       }, 750);
     }
     stopPlay() {
@@ -114,7 +111,7 @@
         const tds = U.qsa(".rp-moves td", this.root);
         if (tds[idx]) {
           tds[idx].classList.add("cur");
-          // автопрокрутка списка ходов: текущий ход всегда виден
+          // keep the current move visible while scrolling the list
           if (tds[idx].scrollIntoView) {
             tds[idx].scrollIntoView({ block: "nearest" });
           }

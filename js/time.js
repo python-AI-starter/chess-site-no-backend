@@ -1,14 +1,10 @@
-// ============================================================
-//  Синхронизация серверного времени.
-//  Оценка сдвига берётся КОНСЕРВАТИВНО (смещение в «будущее»):
-//  теперь() >= реального серверного времени. Задержки сети могут
-//  только опоздать — значит честный клиент заявляет флаг С
-//  ОПОЗДАНИЕМ, никогда раньше. Раньше заявить невозможно.
-// ============================================================
+// Server time synchronization. The offset is estimated conservatively,
+// biased into the future: now() never reports earlier than true server
+// time, so honest flag claims can only arrive late, never early.
 (function () {
   "use strict";
   const T = {
-    offset: 0,          // server - local (консервативно, в будущее)
+    offset: 0,          // server - local, biased forward
     synced: false,
     _syncing: null
   };
@@ -19,9 +15,9 @@
     const t1 = Date.now();
     if (error || typeof data !== "number") return null;
     const rtt = t1 - t0;
-    const serverAtMid = data;                    // сервер примерно в середине RTT
+    const serverAtMid = data;                    // server timestamp around mid-RTT
     const localAtMid = t0 + rtt / 2;
-    // консервативная граница: серверные часы >= localAtMid + offset_best + rtt/2
+    // conservative bound: server clock >= localAtMid + best offset + rtt/2
     const offsetBest = serverAtMid - localAtMid;
     return { rtt, offset: offsetBest + rtt / 2 };
   }
@@ -40,7 +36,7 @@
     return T._syncing;
   }
 
-  // консервативная оценка серверного времени (>= истинного)
+  // conservative server time estimate, never earlier than true time
   function now() { return Date.now() + T.offset; }
 
   setInterval(() => sync(true).catch(() => {}), 120000);
