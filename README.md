@@ -200,16 +200,22 @@ fixed at 1.
   CPU cores with an Auto option in the gear menu, and without
   isolation the single-threaded build runs with threads at 1.
 - Analysis board (/analysis, link in the navbar): free board for both
-  colors, move list with keyboard navigation, FEN loading from a query
+  colors, a move tree with keyboard navigation (the main line renders
+  full size, variations render smaller between the rows of the main
+  line where they branch; a right-click on any move opens a menu to
+  delete the line from that move, copy its PGN, or demote the main line
+  so the top variation takes its place), FEN loading from a query
   parameter (/analysis?fen=...) or by pasting it into the inline field
-  under the board (it applies itself, no load button), move undo,
-  position reset, and the same inline PGN field for importing a game or
-  copying the current line.
+  under the board (it applies itself, no load button), position reset,
+  and the same inline PGN field for importing a game or copying the
+  current line.
 - Board editor (/editor, link in the navbar): Lichess-style position
-  setup. Pieces of both colors sit in trays above and below the board;
-  a click loads a piece for placement (clicks or drags place copies),
-  board pieces move by drag or click-click, right-click deletes, and
-  the trash tool deletes with a left click (sweeping works too). Flip,
+  setup. Each tray above and below the board is one full-width strip of
+  square slots: the pointing hand, six pieces of one color, and the
+  trash. The hand moves board pieces by drag or click-click (green
+  while active), a clicked tray piece stays selected (blue) and places
+  copies on any number of squares, the trash erases pieces by click or
+  sweep (red while active), and right-click deletes in any mode. Flip,
   start position and clear board buttons, plus a side-to-move toggle.
   Castling checkboxes (O-O and O-O-O per side) exist only while the
   required king and rook stand on their original squares; moving them
@@ -218,8 +224,12 @@ fixed at 1.
   black pawns on d5 and f5 that is none, d6 or f6), none by default.
   The FEN field applies a pasted or edited position after Enter, the
   URL field holds a /editor/<fen> link that reopens the exact position
-  and rules, and the analyze button sends the position to the analysis
-  board with castling, en passant and turn intact.
+  and rules, and the analyze button validates the position with the
+  same rules the analysis board and the engine apply (structure, one
+  king per side, no back-rank pawns, plausible en passant square, no
+  check to the side not to move): an invalid position shows a warning
+  with the reason and stays in the editor, a valid one is sent to the
+  analysis board with castling, en passant and turn intact.
 - Open challenges mirror the quick-pairing queue: the list shows every
   player searching through "Быстрая игра" (the seeks table, publicly
   readable, so guests see it too). Own seeks appear in the list at
@@ -306,10 +316,12 @@ js/exporter.js          FEN/PGN export (chess.js PGN builder, copy/download moda
 js/engine.js            Stockfish 19 WASM host: CDN fetch, Cache Storage,
                         blob worker, UCI bridge
 js/analysis.js          engine analysis panel (vertical eval bar, MultiPV
-                        lines, gear menu), the /analysis board page, and
-                        the inline auto-applying FEN/PGN fields
-js/editor.js            board editor page (/editor): piece trays, trash,
-                        castling and en passant rules, FEN/URL fields
+                        lines, gear menu), the /analysis board page with
+                        its move tree and variations, and the inline
+                        auto-applying FEN/PGN fields
+js/editor.js            board editor page (/editor): tray tools (hand,
+                        pieces, trash), castling and en passant rules,
+                        FEN/URL fields
 js/time.js              conservative server-time synchronization
 js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
 js/board.js             board rendering, click-click and drag&drop, arrows

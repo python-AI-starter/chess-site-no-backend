@@ -17,8 +17,8 @@
   const CFG = window.SITE_CONFIG;
   const t = (key, params) => I18n.t(key, params);
 
-  // engine settings (v2 adds threads = 0 meaning "auto"); the legacy key
-  // is migrated once so nobody stays stuck on the old forced single thread
+  // engine settings; threads = 0 means "auto", the legacy storage key is
+  // migrated once so nobody stays stuck on a forced single thread
   const SETTINGS_KEY = "ladya-sf-settings-v2";
   const LEGACY_SETTINGS_KEY = "ladya-sf-settings";
   const ON_KEY = "ladya-sf-on";
@@ -567,13 +567,20 @@
 
   // Analysis board page (#/analysis): Lichess-style layout, engine on
   // top, moves in the middle, buttons at the bottom, FEN/PGN fields under
-  // the board that apply their content automatically.
+  // the board that apply their content automatically. The move list is a
+  // tree: the main line renders full size and every variation renders
+  // smaller between the rows of the main line where it branches. A
+  // right-click on any move opens a menu to delete the line from that
+  // move, copy its PGN, or demote the main line at its earliest branch
+  // point so the top variation takes its place.
   const AnalysisBoardPage_render = async function (container, fenParam) {
     const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     const S = {
       startFen: START_FEN,
-      hist: [],      // [{u,s,fenAfter}]
-      viewPly: 0,    // half-moves shown (0 = start position)
+      root: null,     // pseudo-node holding the start position
+      cur: null,      // current node or null (start position shown)
+      seq: 0,
+      menu: null,
       destroyed: false
     };
     container.innerHTML = `<div class="card center"><span class="spinner"></span> ${U.esc(t("common.loading"))}</div>`;
@@ -611,7 +618,6 @@
         <div class="card an-moves-card"><div class="moves-list an-moves" id="ab-moves"></div></div>
         <div class="an-actions">
           <button class="btn small" id="ab-flip">⇅ ${U.esc(t("game.flip"))}</button>
-          <button class="btn small" id="ab-undo" title="${U.esc(t("analysis.undoTitle"))}">↩ ${U.esc(t("analysis.undo"))}</button>
           <button class="btn small" id="ab-reset">${U.esc(t("analysis.reset"))}</button>
         </div>
       </div>
@@ -619,41 +625,84 @@
     container.innerHTML = "";
     container.appendChild(root);
 
-    function chessAt(ply) {
-      // rebuild the position after `ply` half-moves (cheap enough locally)
+    // move tree: every node is one played half-move; children[0] is the
+    // main continuation, the rest are variations shown smaller
+    function mkNode(u, s, fenAfter, parent) {
+      return { _id: ++S.seq, u, s, fenAfter, parent, children: [] };
+    }
+    function resetTree(startFen) {
+      S.startFen = startFen;
+      S.root = { _id: 0, u: null, s: null, fenAfter: startFen, parent: null, children: [] };
+      S.cur = null;
+    }
+    resetTree(S.startFen);
+
+    function pathOf(node) {
+      const out = [];
+      for (let n = node; n && n.parent; n = n.parent) out.push(n);
+      return out.reverse();
+    }
+    function isDescendant(node, ancestor) {
+      for (let n = node; n; n = n.parent) if (n === ancestor) return true;
+      return false;
+    }
+    // a node sits on the main line when it and every ancestor is the
+    // first child of its parent
+    function onMainLine(node) {
+      for (let n = node; n && n.parent; n = n.parent) {
+        if (n.parent.children[0] !== n) return false;
+      }
+      return true;
+    }
+
+    function chessAt(node) {
+      // rebuild the position after the moves leading to `node` (cheap
+      // enough locally)
       const c = new window.Chess(S.startFen);
-      for (let i = 0; i < ply; i++) {
-        const m = S.hist[i];
-        c.move({ from: m.u.slice(0, 2), to: m.u.slice(2, 4), promotion: m.u.length === 5 ? m.u[4] : undefined });
+      for (const n of pathOf(node)) {
+        c.move({ from: n.u.slice(0, 2), to: n.u.slice(2, 4), promotion: n.u.length === 5 ? n.u[4] : undefined });
       }
       return c;
     }
-    function fenAt(ply) { return ply <= 0 ? S.startFen : S.hist[ply - 1].fenAfter; }
-    function stmAt(ply) {
-      const parts = fenAt(ply).split(" ");
+    function fenAt(node) { return node ? node.fenAfter : S.startFen; }
+    function stmAt(node) {
+      const parts = fenAt(node).split(" ");
       return parts[1] || "w";
     }
-
-    function legalAt(ply) {
-      try { return chessAt(ply).moves({ verbose: true }).map(m => m.from + m.to + (m.promotion || "")); }
+    function legalAt(node) {
+      try { return chessAt(node).moves({ verbose: true }).map(m => m.from + m.to + (m.promotion || "")); }
       catch (e) { return []; }
+    }
+    function lineEnd(node) {
+      let n = node;
+      while (n && n.children.length) n = n.children[0];
+      return n;
+    }
+    // the line the viewer is on: the path to the current node followed by
+    // its main continuation down to the leaf
+    function currentLineNodes() {
+      const line = pathOf(S.cur);
+      let n = S.cur;
+      while (n && n.children.length) { n = n.children[0]; line.push(n); }
+      return line;
     }
 
     const board = new ChessBoard(U.qs("#ab-board", root), {
       onMove: (from, to, promo) => playMove(from, to, promo),
       canMove: () => true,
       canPremove: () => false,
-      myColor: () => (stmAt(S.viewPly) === "w" ? "white" : "black")
+      myColor: () => (stmAt(S.cur) === "w" ? "white" : "black")
     });
 
     const fenInput = U.qs("#ab-fen", root);
     const pgnInput = U.qs("#ab-pgn", root);
 
     function currentPgn() {
-      if (!S.hist.length) return "";
+      const line = currentLineNodes();
+      if (!line.length) return "";
       return Exporter.buildPgn({
         startFen: S.startFen,
-        moves: S.hist,
+        moves: line,
         status: "active",
         initial_ms: null,
         increment_ms: 0,
@@ -666,7 +715,7 @@
     // keep the inline fields in step with the position, but never fight
     // the user while they are typing in a field
     function refreshFields(force) {
-      if (force || document.activeElement !== fenInput) fenInput.value = fenAt(S.viewPly);
+      if (force || document.activeElement !== fenInput) fenInput.value = fenAt(S.cur);
       if (force || document.activeElement !== pgnInput) pgnInput.value = currentPgn();
     }
 
@@ -677,61 +726,223 @@
     }
 
     function drawBoard() {
-      const u = S.viewPly > 0 ? S.hist[S.viewPly - 1].u : null;
-      board.setPosition(fenAt(S.viewPly), { lastMove: u ? [u.slice(0, 2), u.slice(2, 4)] : null });
-      board.setMoves(legalAt(S.viewPly));
+      const u = S.cur ? S.cur.u : null;
+      board.setPosition(fenAt(S.cur), { lastMove: u ? [u.slice(0, 2), u.slice(2, 4)] : null });
+      board.setMoves(legalAt(S.cur));
       board.setInteractive(true);
       drawMoves();
       refreshFields(false);
     }
 
     function loadPosition(fen) {
-      S.startFen = fen;
-      S.hist = [];
-      S.viewPly = 0;
+      resetTree(fen);
       redrawAll();
       refreshFields(true);
     }
 
     function loadParsedPgn(p) {
-      S.startFen = p.startFen;
-      S.hist = p.moves;
-      S.viewPly = p.moves.length;
+      resetTree(p.startFen);
+      let parent = S.root;
+      for (const m of p.moves) {
+        const node = mkNode(m.u, m.s, m.fenAfter, parent);
+        parent.children.push(node);
+        parent = node;
+      }
+      S.cur = p.moves.length ? parent : null;
       redrawAll();
       refreshFields(true);
     }
 
     function playMove(from, to, promo) {
-      const c = chessAt(S.viewPly);
+      const c = chessAt(S.cur);
       let mv;
       try {
         mv = c.move({ from, to, promotion: promo || undefined });
       } catch (e) { mv = null; }
       if (!mv) return;
-      // a move played from a navigated position truncates the rest of the line
-      S.hist = S.hist.slice(0, S.viewPly);
-      S.hist.push({ u: from + to + (promo || ""), s: mv.san, fenAfter: c.fen() });
-      S.viewPly = S.hist.length;
+      const u = from + to + (promo || "");
+      const parent = S.cur || S.root;
+      const existing = parent.children.find(ch => ch.u === u);
+      if (existing) {
+        S.cur = existing;   // the same move: follow the existing line
+      } else {
+        // a new move continues the line or, when the position already has
+        // continuations, branches off as the last variation
+        S.cur = mkNode(u, mv.san, c.fen(), parent);
+        parent.children.push(S.cur);
+      }
       U.soundMove();
-      drawBoard();
-      drawReplayBar();
-      panel.sync();
+      redrawAll();
+      refreshFields(false);
+    }
+
+    // remove the clicked move and everything after it in its line (when
+    // the move opens a variation, the whole variation goes away)
+    function deleteFrom(node) {
+      const parent = node.parent;
+      if (!parent) return;
+      const i = parent.children.indexOf(node);
+      if (i < 0) return;
+      parent.children.splice(i, 1);
+      if (S.cur === node || isDescendant(S.cur, node)) S.cur = parent;
+      redrawAll();
+      refreshFields(true);
+    }
+
+    // demote the main line at its earliest branch point: the first
+    // variation there becomes the main line and the former main
+    // continuation becomes a variation; a line that is already a
+    // variation stays untouched
+    function makeVariation(node) {
+      if (!onMainLine(node)) return;
+      let n = S.root, branch = null;
+      while (n.children.length) {
+        n = n.children[0];
+        if (n.children.length >= 2) { branch = n; break; }
+      }
+      if (!branch) return;
+      const c = branch.children;
+      const tmp = c[0]; c[0] = c[1]; c[1] = tmp;
+      redrawAll();
+      refreshFields(true);
+    }
+
+    // PGN of the line the clicked move belongs to: the path to it plus
+    // its main continuation down to the leaf
+    function copyVariationPgn(node) {
+      const line = pathOf(node);
+      let n = node;
+      while (n && n.children.length) { n = n.children[0]; line.push(n); }
+      if (!line.length) return;
+      const pgn = Exporter.buildPgn({
+        startFen: S.startFen,
+        moves: line,
+        status: "active",
+        initial_ms: null,
+        increment_ms: 0,
+        event: "Analysis line",
+        rated: false,
+        created_at: new Date().toISOString()
+      });
+      if (pgn) Exporter.copyText(pgn);
+    }
+
+    // right-click menu on a move; clamped to the viewport
+    function closeMoveMenu() {
+      if (S.menu) { S.menu.remove(); S.menu = null; }
+    }
+    function openMoveMenu(ev, node) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      closeMoveMenu();
+      const menu = U.el(`<div class="ctx-menu">
+        <button data-act="del">${U.esc(t("analysis.ctxDelete"))}</button>
+        <button data-act="pgn">${U.esc(t("analysis.ctxCopyPgn"))}</button>
+        <button data-act="var">${U.esc(t("analysis.ctxMakeVar"))}</button>
+      </div>`);
+      menu.addEventListener("click", (e) => {
+        const btn = e.target.closest("button");
+        if (!btn) return;
+        const act = btn.dataset.act;
+        closeMoveMenu();
+        if (act === "del") deleteFrom(node);
+        else if (act === "pgn") copyVariationPgn(node);
+        else if (act === "var") makeVariation(node);
+      });
+      document.body.appendChild(menu);
+      const r = menu.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(ev.clientX, window.innerWidth - r.width - 8)) + "px";
+      menu.style.top = Math.max(8, Math.min(ev.clientY, window.innerHeight - r.height - 8)) + "px";
+      S.menu = menu;
+    }
+    function onDocClick() { closeMoveMenu(); }
+    function onDocKey(e) { if (e.key === "Escape") closeMoveMenu(); }
+    function onDocScroll() { closeMoveMenu(); }
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onDocKey);
+    document.addEventListener("scroll", onDocScroll, true);
+    window.addEventListener("resize", onDocScroll);
+
+    // one SAN span of a rendered line; a white move opens its move
+    // number, the first move of a line on a black ply gets "N... "
+    function moveSpan(node, ply, depth, first) {
+      let numPrefix = "";
+      if (ply % 2 === 1) numPrefix = Math.ceil(ply / 2) + ". ";
+      else if (first) numPrefix = (ply / 2) + "... ";
+      const cls = "mv d" + Math.min(depth, 3) + (S.cur === node ? " cur" : "");
+      return `<a href="javascript:void(0)" class="${cls}" data-nid="${node._id}">${U.esc(numPrefix + node.s)}</a> `;
+    }
+    // a full line: main continuations with nested variations inline
+    function lineHtml(startNode, ply, depth) {
+      let html = "", n = startNode, p = ply, first = true;
+      while (n) {
+        html += moveSpan(n, p, depth, first);
+        first = false;
+        if (n.children.length > 1) {
+          for (const v of n.children.slice(1)) {
+            html += `<span class="var-inline">(${lineHtml(v, p + 1, depth + 1).trim()}) </span>`;
+          }
+        }
+        n = n.children[0];
+        p++;
+      }
+      return html;
     }
 
     function drawMoves() {
-      const rows = [];
-      for (let i = 0; i < S.hist.length; i += 2) {
-        const plyW = i + 1, plyB = i + 2;
-        rows.push(`<tr><td class="num">${i / 2 + 1}.</td>
-          <td data-ply="${plyW}" class="${plyW === S.viewPly ? "cur" : ""}">${U.esc(S.hist[i].s)}</td>
-          <td data-ply="${plyB}" class="${plyB === S.viewPly ? "cur" : ""}">${S.hist[i + 1] ? U.esc(S.hist[i + 1].s) : ""}</td></tr>`);
+      const box = U.qs("#ab-moves", root);
+      const main = [];
+      for (let n = S.root.children[0]; n; n = n.children[0]) main.push(n);
+      if (!main.length) {
+        box.innerHTML = `<div class="empty">${U.esc(t("analysis.noMoves"))}</div>`;
+        return;
       }
-      U.qs("#ab-moves", root).innerHTML = rows.length ? `<table>${rows.join("")}</table>`
-        : `<div class="empty">${U.esc(t("analysis.noMoves"))}</div>`;
-      U.qsa("#ab-moves td[data-ply]", root).forEach(td =>
-        td.addEventListener("click", () => goto(Number(td.dataset.ply))));
-      const list = U.qs("#ab-moves", root);
-      list.scrollTop = list.scrollHeight;
+      const parts = [];
+      for (let i = 0; i < main.length; i += 2) {
+        const w = main[i], b = main[i + 1] || null;
+        const num = i / 2 + 1;
+        const stripe = (i / 2) % 2 === 0 ? " stripe" : "";
+        parts.push(`<div class="mrow${stripe}"><span class="num">${num}.</span>
+          <span class="mcell${S.cur === w ? " cur" : ""}" data-nid="${w._id}">${U.esc(w.s)}</span>
+          ${b ? `<span class="mcell${S.cur === b ? " cur" : ""}" data-nid="${b._id}">${U.esc(b.s)}</span>` : "<span></span>"}</div>`);
+        // variations branching at the white move and at the black reply
+        // render between the rows of the main line
+        for (const v of w.parent.children.slice(1)) {
+          parts.push(`<div class="var-line">${lineHtml(v, i + 1, 1)}</div>`);
+        }
+        if (b) {
+          for (const v of b.parent.children.slice(1)) {
+            parts.push(`<div class="var-line">${lineHtml(v, i + 2, 1)}</div>`);
+          }
+        }
+      }
+      box.innerHTML = parts.join("");
+      U.qsa("[data-nid]", box).forEach(el => {
+        const id = Number(el.dataset.nid);
+        el.addEventListener("click", () => {
+          const node = findNode(id);
+          if (node) { S.cur = node; redrawAll(); refreshFields(false); }
+        });
+        el.addEventListener("contextmenu", (ev) => {
+          const node = findNode(id);
+          if (node) openMoveMenu(ev, node);
+        });
+      });
+      const cur = U.qs(".cur", box);
+      if (cur && cur.scrollIntoView) cur.scrollIntoView({ block: "nearest" });
+    }
+    function findNode(id) {
+      if (!id) return null;
+      let found = null;
+      const scan = (n) => {
+        if (found) return;
+        for (const ch of n.children) {
+          if (ch._id === id) { found = ch; return; }
+          scan(ch);
+        }
+      };
+      scan(S.root);
+      return found;
     }
 
     function drawReplayBar() {
@@ -741,19 +952,25 @@
         <button class="btn ghost small" data-nav="prev" title="${U.esc(t("rp.prev"))}">&#9664;</button>
         <button class="btn ghost small" data-nav="next" title="${U.esc(t("rp.next"))}">&#9654;</button>
         <button class="btn ghost small" data-nav="last" title="${U.esc(t("rp.last"))}">&#9654;|</button>
-        <span class="muted small" id="ab-pos">${S.viewPly} / ${S.hist.length}</span>`;
+        <span class="muted small" id="ab-pos"></span>`;
       U.qsa("button[data-nav]", bar).forEach(b => b.addEventListener("click", () => {
         const a = b.dataset.nav;
-        if (a === "first") goto(0);
-        else if (a === "prev") goto(S.viewPly - 1);
-        else if (a === "next") goto(S.viewPly + 1);
-        else if (a === "last") goto(S.hist.length);
+        if (a === "first") gotoNode(null);
+        else if (a === "prev") gotoNode(S.cur ? S.cur.parent : null);
+        else if (a === "next") gotoNode(S.cur ? S.cur.children[0] || S.cur : S.root.children[0] || null);
+        else if (a === "last") {
+          const end = lineEnd(S.cur || S.root);
+          gotoNode(end === S.root ? null : end);
+        }
       }));
-      U.qs("#ab-pos", bar).textContent = `${S.viewPly} / ${S.hist.length}`;
+      const curDepth = S.cur ? pathOf(S.cur).length : 0;
+      const end = lineEnd(S.cur || S.root);
+      const endDepth = end === S.root || !end ? 0 : pathOf(end).length;
+      U.qs("#ab-pos", bar).textContent = `${curDepth} / ${endDepth}`;
     }
 
-    function goto(ply) {
-      S.viewPly = Math.max(0, Math.min(S.hist.length, ply));
+    function gotoNode(node) {
+      S.cur = node;
       drawBoard();
       drawReplayBar();
       panel.sync();
@@ -777,35 +994,30 @@
     });
 
     U.qsa(".an-copy", root).forEach(b => b.addEventListener("click", () => {
-      if (b.dataset.copy === "fen") Exporter.copyText(fenInput.value || fenAt(S.viewPly));
+      if (b.dataset.copy === "fen") Exporter.copyText(fenInput.value || fenAt(S.cur));
       else Exporter.copyText(pgnInput.value || currentPgn());
     }));
 
     S.keyHandler = (e) => {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
-      if (e.key === "ArrowLeft") { goto(S.viewPly - 1); e.preventDefault(); }
-      else if (e.key === "ArrowRight") { goto(S.viewPly + 1); e.preventDefault(); }
-      else if (e.key === "Home") { goto(0); e.preventDefault(); }
-      else if (e.key === "End") { goto(S.hist.length); e.preventDefault(); }
+      if (e.key === "ArrowLeft") { gotoNode(S.cur ? S.cur.parent : null); e.preventDefault(); }
+      else if (e.key === "ArrowRight") { gotoNode(S.cur ? (S.cur.children[0] || S.cur) : (S.root.children[0] || null)); e.preventDefault(); }
+      else if (e.key === "Home") { gotoNode(null); e.preventDefault(); }
+      else if (e.key === "End") {
+        const end = lineEnd(S.cur || S.root);
+        gotoNode(end === S.root ? null : end);
+        e.preventDefault();
+      }
     };
     document.addEventListener("keydown", S.keyHandler);
 
     U.qs("#ab-flip", root).addEventListener("click", () => board.flip());
-    U.qs("#ab-undo", root).addEventListener("click", () => {
-      if (!S.hist.length) return;
-      S.hist.pop();
-      S.viewPly = Math.min(S.viewPly, S.hist.length);
-      drawBoard();
-      drawReplayBar();
-      panel.sync();
-      refreshFields(true);
-    });
     U.qs("#ab-reset", root).addEventListener("click", () => {
       loadPosition(START_FEN);
     });
 
     const panel = new AnalysisPanel(U.qs("#ab-engine", root), {
-      getFen: () => fenAt(S.viewPly),
+      getFen: () => fenAt(S.cur),
       getBoard: () => board,
       getBarSlot: () => U.qs("#ab-eval", root)
     });
@@ -833,7 +1045,12 @@
 
     return function cleanup() {
       S.destroyed = true;
+      closeMoveMenu();
       document.removeEventListener("keydown", S.keyHandler);
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onDocKey);
+      document.removeEventListener("scroll", onDocScroll, true);
+      window.removeEventListener("resize", onDocScroll);
       panel.destroy();
     };
   };
