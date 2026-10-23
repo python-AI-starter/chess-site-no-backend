@@ -167,11 +167,17 @@
     const root = U.el(`<div class="game-layout">
       <div>
         <div class="player-bar" id="pb-top"></div>
-        <div class="board-wrap"><div id="board"></div></div>
+        <div class="an-board-row">
+          <div class="an-eval-slot" id="game-eval-slot"></div>
+          <div class="board-wrap"><div id="board"></div></div>
+        </div>
         <div class="player-bar" id="pb-bottom"></div>
       </div>
       <div>
         <div class="card" id="status-card"></div>
+        <div class="card hidden" id="analysis-card">
+          <div id="analysis-box"></div>
+        </div>
         <div class="card">
           <h3 class="spread row">${U.esc(t("game.moves"))}
             <span class="row" style="gap:6px">
@@ -187,9 +193,6 @@
           <div class="replay-bar" id="replaybar" style="display:none"></div>
           <div class="game-actions" id="actions"></div>
           <div id="drawbox"></div>
-        </div>
-        <div class="card hidden" id="analysis-card">
-          <div id="analysis-box"></div>
         </div>
         <div class="card" id="chat-card" style="display:none">
           <h3>${U.esc(t("game.chat"))}</h3>
@@ -239,7 +242,8 @@
         if (!S.panel) {
           S.panel = new AnalysisPanel(U.qs("#analysis-box", root), {
             getFen: currentFen,
-            getBoard: () => S.board
+            getBoard: () => S.board,
+            getBarSlot: () => U.qs("#game-eval-slot", root)
           });
         }
         S.panel.sync();

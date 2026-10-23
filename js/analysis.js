@@ -1,25 +1,40 @@
-// Engine analysis: a reusable panel (eval bar, MultiPV lines, gear-menu
-// settings) plus the standalone analysis board page. The panel drives the
-// shared Stockfish worker (js/engine.js) over UCI and follows whatever
-// position its host page is currently showing. All engine work happens in
-// the browser; nothing touches the database.
+// Engine analysis: a reusable panel (vertical eval bar with a midpoint
+// mark, MultiPV lines, best-move arrows, gear-menu settings) plus the
+// standalone analysis board page. The panel drives the shared Stockfish
+// worker (js/engine.js) over UCI and follows whatever position its host
+// page is currently showing. All engine work happens in the browser;
+// nothing touches the database.
+//
+// The layout follows Lichess: the engine box sits at the very top of the
+// side column, the move list in the middle, the interface buttons at the
+// bottom; the FEN and PGN fields live directly under the board and apply
+// pasted or edited content automatically, with no separate load button.
+// The eval bar is vertical with a midpoint mark; the best move is drawn
+// as a light-blue arrow and MultiPV runners-up as fading gray arrows.
 (function () {
   "use strict";
 
   const CFG = window.SITE_CONFIG;
   const t = (key, params) => I18n.t(key, params);
 
-  const SETTINGS_KEY = "ladya-sf-settings";
+  // engine settings (v2 adds threads = 0 meaning "auto"); the legacy key
+  // is migrated once so nobody stays stuck on the old forced single thread
+  const SETTINGS_KEY = "ladya-sf-settings-v2";
+  const LEGACY_SETTINGS_KEY = "ladya-sf-settings";
   const ON_KEY = "ladya-sf-on";
-  const DEFAULTS = { movetime: 0, multipv: 1, threads: 1, hash: 32 };
+  const DEFAULTS = { movetime: 0, multipv: 1, threads: 0, hash: 32 };
 
   function loadSettings() {
     try {
-      const s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+      let s = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+      if (!s) {
+        s = JSON.parse(localStorage.getItem(LEGACY_SETTINGS_KEY) || "{}");
+        if (s.threads != null && s.threads <= 1) delete s.threads; // back to auto
+      }
       const out = Object.assign({}, DEFAULTS);
       if ([0, 1000, 2000, 5000, 10000, 30000, 60000].includes(s.movetime)) out.movetime = s.movetime;
       if (s.multipv >= 1 && s.multipv <= 5) out.multipv = s.multipv;
-      if (s.threads >= 1 && s.threads <= 32) out.threads = s.threads;
+      if (s.threads === 0 || (s.threads >= 1 && s.threads <= 32)) out.threads = s.threads;
       if ([16, 32, 64, 128, 256, 512, 1024].includes(s.hash)) out.hash = s.hash;
       return out;
     } catch (e) { return Object.assign({}, DEFAULTS); }
@@ -34,7 +49,7 @@
     try { localStorage.setItem(ON_KEY, v ? "1" : "0"); } catch (e) {}
   }
 
-  // score and eval helpers -------------------------------------------------
+  // score and eval helpers
   function fmtCp(cp) {
     const v = cp / 100;
     return (v > 0 ? "+" : v < 0 ? "" : "") + v.toFixed(2);
@@ -58,7 +73,25 @@
     if (nps >= 1000) return Math.round(nps / 1000) + "K";
     return String(nps);
   }
+  // compact score for the narrow eval bar: no sign, one decimal, short mate
+  function fmtBarScore(score) {
+    if (!score) return "";
+    if (score.mate != null) return score.mate > 0 ? "M" + score.mate : "-M" + Math.abs(score.mate);
+    return Math.abs(score.cp / 100).toFixed(1);
+  }
   function fmtBytes(n) { return (n / 1048576).toFixed(1); }
+
+  // a position where the side NOT to move is already in check never occurs
+  // in a real game; it can only come from a hand-typed FEN, and searching
+  // it can wedge the engine, so such FENs are refused before "go"
+  function searchableFen(fen) {
+    try {
+      const c = new window.Chess(fen);
+      const parts = c.fen().split(" ");
+      parts[1] = parts[1] === "w" ? "b" : "w";
+      return !new window.Chess(parts.join(" ")).inCheck();
+    } catch (e) { return false; }
+  }
 
   // parse one UCI "info" line into a compact object (or null)
   function parseInfo(line) {
@@ -108,11 +141,40 @@
 
   function sqIdx(name) { return "abcdefgh".indexOf(name[0]) + 8 * (Number(name[1]) - 1); }
 
-  // -------------------------------------------------------------------------
-  // AnalysisPanel: eval bar + engine lines + gear menu. opts:
-  //   getFen()   -> current FEN to analyze
-  //   getBoard() -> ChessBoard instance for arrows (optional)
-  // -------------------------------------------------------------------------
+  // Inline auto-applying field: validates on every edit (debounced) and
+  // applies the value when valid; an invalid value turns the border red,
+  // a successful apply flashes it green. Enter applies immediately.
+  function autoApplyField(input, opts) {
+    let timer = null;
+    const mark = (cls) => {
+      input.classList.remove("bad", "flash-ok");
+      if (cls) {
+        input.classList.add(cls);
+        if (cls === "flash-ok") setTimeout(() => input.classList.remove("flash-ok"), 900);
+      }
+    };
+    const run = () => {
+      const val = input.value.trim();
+      if (!val) { mark(null); return; }
+      const parsed = opts.validate(val);
+      if (parsed == null) { mark("bad"); return; }
+      if (opts.apply(parsed)) mark("flash-ok"); else mark("bad");
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(run, opts.delay || 600);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); run(); }
+    });
+    return { run, mark };
+  }
+
+  // AnalysisPanel: engine head + lines; the eval bar is rendered into a
+  // slot beside the board. opts:
+  //   getFen()     -> current FEN to analyze
+  //   getBoard()   -> ChessBoard instance for arrows (optional)
+  //   getBarSlot() -> element for the vertical eval bar (optional)
   class AnalysisPanel {
     constructor(el, opts) {
       this.el = el;
@@ -122,6 +184,7 @@
       this.unsubs = [];
       this.lines = {};        // multipv index -> {score, depth, pv, nps, nodes}
       this.maxDepth = 0;
+      this.illegal = false;   // current position is not searchable
       this.fen = null;
       this.lastRender = 0;
       this._renderTimer = null;
@@ -149,12 +212,16 @@
           <span class="muted small ep-stat"></span>
           <button class="btn ghost small ep-gear" data-ep="gear" title="${U.esc(t("analysis.settings"))}">⚙</button>
         </div>
-        <div class="eval-bar" title="${U.esc(t("analysis.evalBar"))}">
-          <div class="eval-fill"></div><span class="eval-num"></span>
-        </div>
         <div class="engine-lines"></div>`;
       U.qs('[data-ep="toggle"]', this.el).addEventListener("click", () => this.toggle());
       U.qs('[data-ep="gear"]', this.el).addEventListener("click", () => this.openSettings());
+      // vertical eval bar with a midpoint mark, Lichess style: rendered
+      // next to the board, white share grows from the bottom
+      this._barSlot = this.opts.getBarSlot ? this.opts.getBarSlot() : null;
+      if (this._barSlot) {
+        this._barSlot.innerHTML = `<div class="eval-bar-v hidden" title="${U.esc(t("analysis.evalBar"))}">
+          <div class="ebv-white"></div><div class="ebv-mid"></div><span class="ebv-num"></span></div>`;
+      }
     }
 
     toggle() { this.on ? this.turnOff() : this.turnOn(); }
@@ -162,12 +229,13 @@
     async turnOn() {
       setWasOn(true);
       this.on = true;
+      this.illegal = false;
       this._renderLines(true);
       this._drawStatus();
       try {
         await EngineHost.ensure();
         if (!this.on) return;
-        this._applyEngineSettings();
+        await this._applyEngineSettings();
         this._search();
       } catch (e) {
         this.on = false;
@@ -179,6 +247,7 @@
     turnOff() {
       setWasOn(false);
       this.on = false;
+      this.illegal = false;
       EngineHost.stopSearch();
       this.lines = {};
       this.maxDepth = 0;
@@ -192,30 +261,48 @@
       if (!this.on) { this._clearArrows(); return; }
       this.lines = {};
       this.maxDepth = 0;
+      this.illegal = false;
       this._renderLines(true);
       this._search();
     }
 
-    _applyEngineSettings() {
+    _resolveThreads() {
+      return this.settings.threads > 0 ? this.settings.threads : EngineHost.autoThreads();
+    }
+
+    // push the dialog options into the engine and wait for confirmation:
+    // a search sent back-to-back with a Threads change can deadlock it
+    async _applyEngineSettings() {
       const s = this.settings;
-      EngineHost.send(`setoption name MultiPV value ${s.multipv}`);
-      if (EngineHost.isMultiThreaded()) EngineHost.send(`setoption name Threads value ${s.threads}`);
-      EngineHost.send(`setoption name Hash value ${s.hash}`);
+      const cmds = [`name MultiPV value ${s.multipv}`];
+      if (EngineHost.isMultiThreaded()) cmds.push(`name Threads value ${this._resolveThreads()}`);
+      cmds.push(`name Hash value ${s.hash}`);
+      await EngineHost.configure(cmds);
     }
 
     _search() {
       const fen = this.opts.getFen ? this.opts.getFen() : null;
       if (!fen) return;
+      this.illegal = !searchableFen(fen);
+      if (this.illegal) {
+        // a hand-typed FEN can describe a position that never occurs in a
+        // game (the side not to move is already in check); searching it can
+        // wedge the engine, so show a hint instead and stop any search that
+        // is still running for the previous position
+        EngineHost.stopSearch();
+        this.lines = {};
+        this.maxDepth = 0;
+        this._clearArrows();
+        this._renderLines(true);
+        return;
+      }
       this.fen = fen;
       this._clearArrows();
-      EngineHost.stopSearch();   // safe even when idle
-      EngineHost.send(`position fen ${fen}`);
-      if (this.settings.movetime > 0) EngineHost.send(`go movetime ${this.settings.movetime}`);
-      else EngineHost.send("go infinite");
+      EngineHost.search(fen, this.settings.movetime);
     }
 
     _onUci(line) {
-      if (!this.on) return;
+      if (!this.on || this.illegal) return;   // an illegal position is never searched
       if (/^bestmove/.test(line)) { this._renderSoon(true); return; }
       const info = parseInfo(line);
       if (!info) return;
@@ -260,19 +347,58 @@
       if (b && b.arrows && b.arrows.length) { b.arrows = []; b.render(); }
     }
 
+    // best move as a light-blue arrow, MultiPV runners-up as gray arrows
+    // that fade with each worse line (up to five in total)
     _drawArrows() {
       const b = this.opts.getBoard && this.opts.getBoard();
       if (!b) return;
+      if (!this.on) { if (b.arrows.length) { b.arrows = []; b.render(); } return; }
+      const idxs = Object.keys(this.lines).map(Number)
+        .sort((a, x) => a - x).slice(0, Math.max(1, this.settings.multipv));
       const arrows = [];
-      const tops = Object.keys(this.lines).map(Number).sort((a, x) => a - x).slice(0, 2);
-      tops.forEach((idx, i) => {
+      idxs.forEach((idx) => {
         const pv = this.lines[idx].pv;
-        if (pv && pv.length >= 4) {
-          arrows.push({ from: sqIdx(pv[0].slice(0, 2)), to: sqIdx(pv[0].slice(2, 4)), color: i === 0 ? "green" : "blue" });
+        if (pv && pv[0] && pv[0].length >= 4) {
+          arrows.push({
+            from: sqIdx(pv[0].slice(0, 2)),
+            to: sqIdx(pv[0].slice(2, 4)),
+            color: "engine" + Math.min(Math.max(idx, 1), 5)
+          });
         }
       });
       b.arrows = arrows;
       b.render();
+    }
+
+    // vertical eval bar: white share from the bottom, midpoint mark, the
+    // score number pinned to the fill boundary (kept readable at the ends)
+    _drawBar() {
+      if (!this._barSlot) return;
+      this._barSlot.classList.toggle("hidden", !this.on);
+      const bar = U.qs(".eval-bar-v", this._barSlot);
+      if (!bar) return;
+      bar.classList.toggle("hidden", !this.on);
+      const fill = U.qs(".ebv-white", bar);
+      const num = U.qs(".ebv-num", bar);
+      if (!fill || !num) return;
+      const score = this.lines[1] ? this.lines[1].score : null;
+      const pct = whiteBarPct(score);
+      fill.style.height = pct.toFixed(1) + "%";
+      if (!this.on || !score) { num.textContent = ""; return; }
+      num.textContent = fmtBarScore(score);
+      if (pct < 18) {
+        num.style.top = "auto"; num.style.bottom = "4px";
+        num.style.transform = "translate(-50%, 0)";
+        num.style.color = "#111"; num.style.textShadow = "none";
+      } else if (pct > 82) {
+        num.style.top = "4px"; num.style.bottom = "auto";
+        num.style.transform = "translate(-50%, 0)";
+        num.style.color = "#fff"; num.style.textShadow = "0 1px 2px rgba(0,0,0,.8)";
+      } else {
+        num.style.top = "auto"; num.style.bottom = pct.toFixed(1) + "%";
+        num.style.transform = "translate(-50%, 50%)";
+        num.style.color = "#fff"; num.style.textShadow = "0 1px 2px rgba(0,0,0,.8)";
+      }
     }
 
     _renderLines(reset) {
@@ -280,12 +406,9 @@
       const box = U.qs(".engine-lines", this.el);
       if (!box) return;
       this._drawArrows();
-      const bar = U.qs(".eval-fill", this.el);
-      const num = U.qs(".eval-num", this.el);
+      this._drawBar();
       const top = this.lines[1];
       const score = top ? top.score : null;
-      if (bar) bar.style.width = whiteBarPct(score).toFixed(1) + "%";
-      if (num) num.textContent = this.on && score ? fmtScoreWhite(score) : "";
       const stat = U.qs(".ep-stat", this.el);
       if (stat) {
         if (!this.on) stat.textContent = "";
@@ -296,8 +419,9 @@
       }
       const idxs = Object.keys(this.lines).map(Number).sort((a, b2) => a - b2);
       if (!idxs.length) {
-        box.innerHTML = reset || !this.on
-          ? `<div class="empty muted small">${U.esc(this.on ? t("analysis.thinking") : t("analysis.engineOff"))}</div>`
+        const msg = !this.on ? t("analysis.engineOff") : this.illegal ? t("analysis.illegalPos") : t("analysis.thinking");
+        box.innerHTML = reset || !this.on || this.illegal
+          ? `<div class="empty muted small">${U.esc(msg)}</div>`
           : box.innerHTML;
         return;
       }
@@ -321,6 +445,7 @@
         const stat = U.qs(".ep-stat", this.el);
         if (stat) stat.textContent = U.esc(t("analysis.loadingEngine"));
       }
+      this._drawBar();
     }
 
     _drawProgress(phase, got, total) {
@@ -346,7 +471,12 @@
       const maxThreads = mt ? Math.min(Math.max(navigator.hardwareConcurrency || 1, 1), 32) : 1;
       const opt = (v, l, cur) => `<option value="${v}" ${String(cur) === String(v) ? "selected" : ""}>${U.esc(l)}</option>`;
       const threadOpts = [];
-      for (let i = 1; i <= maxThreads; i++) threadOpts.push(opt(i, String(i), s.threads));
+      if (mt) {
+        threadOpts.push(opt(0, t("analysis.autoThreads") + " (" + EngineHost.autoThreads() + ")", s.threads));
+        for (let i = 1; i <= maxThreads; i++) threadOpts.push(opt(i, String(i), s.threads));
+      } else {
+        threadOpts.push(opt(1, "1", 1));
+      }
       const hashOpts = [16, 32, 64, 128, 256, 512, 1024].filter(v => v <= (CFG.ENGINE_HASH_MAX_MB || 1024))
         .map(v => opt(v, v + " MB", s.hash));
       const mtOpts = [
@@ -387,15 +517,14 @@
           const prev = Object.assign({}, s);
           s.movetime = Number(U.qs("#sf-movetime", m).value) || 0;
           s.multipv = Number(U.qs("#sf-multipv", m).value) || 1;
-          s.threads = mt ? Number(U.qs("#sf-threads", m).value) || 1 : 1;
+          s.threads = mt ? Number(U.qs("#sf-threads", m).value) || 0 : 0;
           s.hash = Number(U.qs("#sf-hash", m).value) || 32;
           root.innerHTML = "";
           saveSettings(s);
           if (this.on &&
               (prev.movetime !== s.movetime || prev.multipv !== s.multipv ||
                prev.threads !== s.threads || prev.hash !== s.hash)) {
-            this._applyEngineSettings();
-            this._search();   // restart the search so the settings take effect
+            this._applyEngineSettings().then(() => this._search());   // restart the search so the settings take effect
           }
         }
       });
@@ -408,18 +537,20 @@
       this.unsubs.forEach(u => { try { u(); } catch (e) {} });
       if (this._renderTimer) clearTimeout(this._renderTimer);
       EngineHost.stopSearch();
+      if (this._barSlot) this._barSlot.innerHTML = "";
       this.el.classList.remove("engine-panel");
       this.el.innerHTML = "";
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Analysis board page (#/analysis): free board, move list, FEN tools.
-  // -------------------------------------------------------------------------
+  // Analysis board page (#/analysis): Lichess-style layout, engine on
+  // top, moves in the middle, buttons at the bottom, FEN/PGN fields under
+  // the board that apply their content automatically.
   const AnalysisBoardPage_render = async function (container, fenParam) {
+    const START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
     const S = {
-      startFen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-      hist: [],      // [{u,s}]
+      startFen: START_FEN,
+      hist: [],      // [{u,s,fenAfter}]
       viewPly: 0,    // half-moves shown (0 = start position)
       destroyed: false
     };
@@ -433,35 +564,33 @@
       } catch (e) { U.toast(t("analysis.badFen"), "error"); }
     }
 
-    const root = U.el(`<div class="game-layout">
-      <div>
-        <div class="board-wrap"><div id="ab-board"></div></div>
+    const root = U.el(`<div class="an-layout">
+      <div class="an-board-col">
+        <div class="an-board-row">
+          <div class="an-eval-slot" id="ab-eval"></div>
+          <div class="board-wrap"><div id="ab-board"></div></div>
+        </div>
+        <div class="replay-bar" id="ab-replaybar"></div>
+        <div class="an-fields">
+          <div class="an-field-row">
+            <input id="ab-fen" class="an-field" spellcheck="false" autocomplete="off"
+              placeholder="${U.esc(t("analysis.fenPh"))}" title="${U.esc(t("analysis.fenFieldTip"))}">
+            <button class="btn ghost small an-copy" data-copy="fen" title="${U.esc(t("analysis.copyTip"))}">⧉</button>
+          </div>
+          <div class="an-field-row">
+            <textarea id="ab-pgn" class="an-field" rows="3" spellcheck="false"
+              placeholder="${U.esc(t("analysis.pgnPh"))}" title="${U.esc(t("analysis.pgnFieldTip"))}"></textarea>
+            <button class="btn ghost small an-copy" data-copy="pgn" title="${U.esc(t("analysis.copyTip"))}">⧉</button>
+          </div>
+        </div>
       </div>
-      <div>
-        <div class="card">
-          <h3>${U.esc(t("analysis.title"))}</h3>
-          <div class="row wrap" style="gap:6px">
-            <button class="btn small" id="ab-flip">⇅ ${U.esc(t("game.flip"))}</button>
-            <button class="btn small" id="ab-undo" title="${U.esc(t("analysis.undoTitle"))}">↩ ${U.esc(t("analysis.undo"))}</button>
-            <button class="btn small" id="ab-reset">${U.esc(t("analysis.reset"))}</button>
-          </div>
-          <label style="margin-top:10px">${U.esc(t("analysis.fenLabel"))}</label>
-          <div class="row"><input id="ab-fen" placeholder="${U.esc(t("analysis.fenPh"))}" spellcheck="false">
-            <button class="btn" id="ab-loadfen">${U.esc(t("analysis.fenLoad"))}</button></div>
-          <div class="row wrap" style="gap:6px;margin-top:8px">
-            <button class="btn ghost small" id="ab-copyfen">${U.esc(t("export.fenBtn"))}</button>
-            <button class="btn ghost small" id="ab-pgn">${U.esc(t("export.pgnBtn"))}</button>
-          </div>
-          <div class="err" id="ab-err"></div>
-        </div>
-        <div class="card">
-          <h3 class="spread row">${U.esc(t("game.moves"))}</h3>
-          <div class="replay-bar" id="ab-replaybar"></div>
-          <div class="moves-list" id="ab-moves"></div>
-        </div>
-        <div class="card" id="ab-engine-card">
-          <h3>${U.esc(t("analysis.engineCard"))}</h3>
-          <div id="ab-engine"></div>
+      <div class="an-side">
+        <div class="card an-engine-card"><div id="ab-engine"></div></div>
+        <div class="card an-moves-card"><div class="moves-list an-moves" id="ab-moves"></div></div>
+        <div class="an-actions">
+          <button class="btn small" id="ab-flip">⇅ ${U.esc(t("game.flip"))}</button>
+          <button class="btn small" id="ab-undo" title="${U.esc(t("analysis.undoTitle"))}">↩ ${U.esc(t("analysis.undo"))}</button>
+          <button class="btn small" id="ab-reset">${U.esc(t("analysis.reset"))}</button>
         </div>
       </div>
     </div>`);
@@ -495,12 +624,59 @@
       myColor: () => (stmAt(S.viewPly) === "w" ? "white" : "black")
     });
 
+    const fenInput = U.qs("#ab-fen", root);
+    const pgnInput = U.qs("#ab-pgn", root);
+
+    function currentPgn() {
+      if (!S.hist.length) return "";
+      return Exporter.buildPgn({
+        startFen: S.startFen,
+        moves: S.hist,
+        status: "active",
+        initial_ms: null,
+        increment_ms: 0,
+        event: "Analysis board",
+        rated: false,
+        created_at: new Date().toISOString()
+      }) || "";
+    }
+
+    // keep the inline fields in step with the position, but never fight
+    // the user while they are typing in a field
+    function refreshFields(force) {
+      if (force || document.activeElement !== fenInput) fenInput.value = fenAt(S.viewPly);
+      if (force || document.activeElement !== pgnInput) pgnInput.value = currentPgn();
+    }
+
+    function redrawAll() {
+      drawBoard();
+      drawReplayBar();
+      panel.sync();
+    }
+
     function drawBoard() {
       const u = S.viewPly > 0 ? S.hist[S.viewPly - 1].u : null;
       board.setPosition(fenAt(S.viewPly), { lastMove: u ? [u.slice(0, 2), u.slice(2, 4)] : null });
       board.setMoves(legalAt(S.viewPly));
       board.setInteractive(true);
       drawMoves();
+      refreshFields(false);
+    }
+
+    function loadPosition(fen) {
+      S.startFen = fen;
+      S.hist = [];
+      S.viewPly = 0;
+      redrawAll();
+      refreshFields(true);
+    }
+
+    function loadParsedPgn(p) {
+      S.startFen = p.startFen;
+      S.hist = p.moves;
+      S.viewPly = p.moves.length;
+      redrawAll();
+      refreshFields(true);
     }
 
     function playMove(from, to, promo) {
@@ -561,6 +737,28 @@
       panel.sync();
     }
 
+    // FEN field: pasted or edited FEN applies itself; an invalid one is
+    // marked with a red border and left untouched
+    autoApplyField(fenInput, {
+      validate: (v) => {
+        try { const c = new window.Chess(v); return c.fen() ? c : null; }
+        catch (e) { return null; }
+      },
+      apply: (c) => { loadPosition(c.fen()); return true; }
+    });
+
+    // PGN field: pasted or edited PGN replaces the line on the board
+    autoApplyField(pgnInput, {
+      delay: 700,
+      validate: (v) => Exporter.parsePgn(v),
+      apply: (p) => { loadParsedPgn(p); return true; }
+    });
+
+    U.qsa(".an-copy", root).forEach(b => b.addEventListener("click", () => {
+      if (b.dataset.copy === "fen") Exporter.copyText(fenInput.value || fenAt(S.viewPly));
+      else Exporter.copyText(pgnInput.value || currentPgn());
+    }));
+
     S.keyHandler = (e) => {
       if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
       if (e.key === "ArrowLeft") { goto(S.viewPly - 1); e.preventDefault(); }
@@ -578,59 +776,38 @@
       drawBoard();
       drawReplayBar();
       panel.sync();
+      refreshFields(true);
     });
     U.qs("#ab-reset", root).addEventListener("click", () => {
-      S.startFen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-      S.hist = [];
-      S.viewPly = 0;
-      U.qs("#ab-fen", root).value = "";
-      drawBoard();
-      drawReplayBar();
-      panel.sync();
-    });
-    U.qs("#ab-loadfen", root).addEventListener("click", () => {
-      const val = U.qs("#ab-fen", root).value.trim();
-      const err = U.qs("#ab-err", root);
-      err.textContent = "";
-      if (!val) return;
-      try {
-        const c = new window.Chess(val);
-        if (!c.fen()) throw new Error("invalid");
-        S.startFen = c.fen();
-        S.hist = [];
-        S.viewPly = 0;
-        drawBoard();
-        drawReplayBar();
-        panel.sync();
-      } catch (e) {
-        err.textContent = t("analysis.badFen");
-      }
-    });
-    U.qs("#ab-fen", root).addEventListener("keydown", (e) => {
-      if (e.key === "Enter") U.qs("#ab-loadfen", root).click();
-    });
-    U.qs("#ab-copyfen", root).addEventListener("click", () =>
-      Exporter.exportFen(fenAt(S.viewPly)));
-    U.qs("#ab-pgn", root).addEventListener("click", () => {
-      Exporter.exportPgn({
-        startFen: S.startFen,
-        moves: S.hist,
-        status: "active",
-        initial_ms: null,
-        increment_ms: 0,
-        event: "Analysis board",
-        rated: false,
-        created_at: new Date().toISOString()
-      }, { white: "?", black: "?" });
+      loadPosition(START_FEN);
     });
 
     const panel = new AnalysisPanel(U.qs("#ab-engine", root), {
       getFen: () => fenAt(S.viewPly),
-      getBoard: () => board
+      getBoard: () => board,
+      getBarSlot: () => U.qs("#ab-eval", root)
     });
+
+    // a FEN or PGN handed over from another page (e.g. a replay field)
+    try {
+      const handedPgn = sessionStorage.getItem("ladya-analysis-pgn");
+      if (handedPgn) {
+        sessionStorage.removeItem("ladya-analysis-pgn");
+        const p = Exporter.parsePgn(handedPgn);
+        if (p) { loadParsedPgn(p); U.toast(t("analysis.pgnImported"), "good"); }
+        else U.toast(t("analysis.badPgn"), "error");
+      } else {
+        const handedFen = sessionStorage.getItem("ladya-analysis-fen");
+        if (handedFen) {
+          sessionStorage.removeItem("ladya-analysis-fen");
+          loadPosition(new window.Chess(handedFen).fen());
+        }
+      }
+    } catch (e) {}
 
     drawBoard();
     drawReplayBar();
+    refreshFields(true);
 
     return function cleanup() {
       S.destroyed = true;
@@ -641,4 +818,5 @@
 
   window.AnalysisPanel = AnalysisPanel;
   window.AnalysisBoardPage = { render: AnalysisBoardPage_render };
+  window.autoApplyField = autoApplyField;   // shared by the replay fields
 })();

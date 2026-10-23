@@ -374,48 +374,112 @@
       return;
     }
     slot.innerHTML = "";
-    const wrap = document.createElement("div");
+    // same layout as the analysis board: engine on top of the side column,
+    // moves in the middle, FEN/PGN fields under the board
+    const wrap = U.el(`<div class="an-layout rp-an">
+      <div class="an-board-col">
+        <div class="an-board-row">
+          <div class="an-eval-slot"></div>
+          <div class="board-wrap"><div class="rp-board"></div></div>
+        </div>
+        <div class="replay-bar an-nav"></div>
+        <div class="an-fields">
+          <div class="an-field-row">
+            <input class="an-field rp-fen" spellcheck="false" autocomplete="off"
+              title="${U.esc(t("analysis.fenFieldTip"))}">
+            <button class="btn ghost small an-copy" data-copy="fen" title="${U.esc(t("analysis.copyTip"))}">⧉</button>
+          </div>
+          <div class="an-field-row">
+            <textarea class="an-field rp-pgn" rows="3" spellcheck="false"
+              title="${U.esc(t("analysis.pgnFieldTip"))}"></textarea>
+            <button class="btn ghost small an-copy" data-copy="pgn" title="${U.esc(t("analysis.copyTip"))}">⧉</button>
+          </div>
+        </div>
+      </div>
+      <div class="an-side">
+        <div class="card an-engine-card"><div class="rp-engine"></div></div>
+        <div class="card an-moves-card"><div class="moves-list rp-moves"></div></div>
+      </div>
+    </div>`);
     slot.appendChild(wrap);
-    // FEN / PGN export and the engine toggle under the replay
-    const bar = document.createElement("div");
-    bar.className = "export-row";
-    bar.innerHTML = `
-      <button class="btn ghost small" data-x="fen" title="${U.esc(t("export.fenTitle"))}">${U.esc(t("export.fenBtn"))}</button>
-      <button class="btn ghost small" data-x="pgn" title="${U.esc(t("export.pgnTitle"))}">${U.esc(t("export.pgnBtn"))}</button>
-      <button class="btn ghost small" data-x="an">⚙ ${U.esc(t("analysis.engineCard"))}</button>`;
-    slot.appendChild(bar);
-    const anSlot = document.createElement("div");
-    slot.appendChild(anSlot);
+
+    const fenInput = U.qs(".rp-fen", wrap);
+    const pgnInput = U.qs(".rp-pgn", wrap);
+    const gamePgn = Exporter.buildPgn({
+      startFen: data.start_fen, moves: data.moves || [],
+      result: meta && meta.result, status: "finished",
+      rated: !!(meta && meta.rated),
+      initial_ms: meta && meta.initial_ms, increment_ms: (meta && meta.increment_ms) || 0,
+      finished_at: meta && meta.finished_at,
+      white: meta && meta.wp ? meta.wp.username : undefined,
+      black: meta && meta.bp ? meta.bp.username : undefined
+    }) || "";
+
     openReplay = new ChessReplay(wrap, {
       replay: { ok: true, start_fen: data.start_fen, fens, moves: data.moves || [] },
       orientation: "white", keyboard: true,
-      onChange: () => { if (openReplayPanel && openReplayPanel.on) openReplayPanel.sync(); }
-    });
-    U.qs('[data-x="fen"]', bar).addEventListener("click", () =>
-      Exporter.exportFen(openReplay.fenAt(openReplay.ply)));
-    U.qs('[data-x="pgn"]', bar).addEventListener("click", () => {
-      Exporter.exportPgn({
-        startFen: data.start_fen, moves: data.moves || [],
-        result: meta && meta.result, status: "finished",
-        rated: !!(meta && meta.rated),
-        initial_ms: meta && meta.initial_ms, increment_ms: (meta && meta.increment_ms) || 0,
-        finished_at: meta && meta.finished_at
-      }, {
-        white: meta && meta.wp ? meta.wp.username : undefined,
-        black: meta && meta.bp ? meta.bp.username : undefined
-      });
-    });
-    U.qs('[data-x="an"]', bar).addEventListener("click", (e) => {
-      const btn = e.currentTarget;
-      const opening = !openReplayPanel;
-      if (openReplayPanel) { openReplayPanel.destroy(); openReplayPanel = null; }
-      if (opening) {
-        openReplayPanel = new AnalysisPanel(anSlot, {
-          getFen: () => openReplay.fenAt(openReplay.ply),
-          getBoard: () => openReplay.board
-        });
+      mount: {
+        board: U.qs(".rp-board", wrap),
+        nav: U.qs(".an-nav", wrap),
+        moves: U.qs(".rp-moves", wrap)
+      },
+      onChange: () => {
+        if (openReplayPanel && openReplayPanel.on) openReplayPanel.sync();
+        if (document.activeElement !== fenInput) {
+          fenInput.value = openReplay.fenAt(openReplay.ply);
+          fenInput.classList.remove("bad", "flash-ok");
+        }
       }
-      btn.classList.toggle("active", opening);
+    });
+
+    // FEN field: a position from this game jumps to its ply; anything else
+    // continues on the analysis board
+    const sameFen = (a, b) => {
+      const pa = String(a || "").split(" "), pb = String(b || "").split(" ");
+      return pa.slice(0, 4).join(" ") === pb.slice(0, 4).join(" ");
+    };
+    fenInput.value = openReplay.fenAt(openReplay.ply);
+    autoApplyField(fenInput, {
+      validate: (v) => {
+        try { const c = new window.Chess(v); return c.fen() ? c : null; }
+        catch (e) { return null; }
+      },
+      apply: (c) => {
+        const fen = c.fen();
+        if (sameFen(openReplay.data.start_fen, fen)) { openReplay.goto(0); return true; }
+        for (let i = 0; i < openReplay.total; i++) {
+          if (sameFen(openReplay.data.fens[i], fen)) { openReplay.goto(i + 1); return true; }
+        }
+        try { sessionStorage.setItem("ladya-analysis-fen", fen); } catch (e) {}
+        U.toast(t("analysis.fenNotFound"), "");
+        location.hash = "#/analysis";
+        return true;
+      }
+    });
+
+    // PGN field: filled with this game's PGN for copying; a pasted PGN
+    // opens on the analysis board
+    pgnInput.value = gamePgn;
+    autoApplyField(pgnInput, {
+      delay: 800,
+      validate: (v) => Exporter.parsePgn(v),
+      apply: () => {
+        try { sessionStorage.setItem("ladya-analysis-pgn", pgnInput.value.trim()); } catch (e) {}
+        U.toast(t("analysis.pgnImported"), "good");
+        location.hash = "#/analysis";
+        return true;
+      }
+    });
+
+    U.qsa(".an-copy", wrap).forEach(b => b.addEventListener("click", () => {
+      if (b.dataset.copy === "fen") Exporter.copyText(fenInput.value || openReplay.fenAt(openReplay.ply));
+      else Exporter.copyText(pgnInput.value || gamePgn);
+    }));
+
+    openReplayPanel = new AnalysisPanel(U.qs(".rp-engine", wrap), {
+      getFen: () => openReplay.fenAt(openReplay.ply),
+      getBoard: () => openReplay.board,
+      getBarSlot: () => U.qs(".an-eval-slot", wrap)
     });
   }
 

@@ -6,13 +6,52 @@
 <title>Ladya</title>
 <meta name="description" content="Simple online chess.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#9820;</text></svg>">
-<link rel="stylesheet" href="css/style.css?v=8">
+<link rel="stylesheet" href="css/style.css?v=9">
 <script>
 // apply the saved theme before first paint to avoid a light flash
 try {
   if ((localStorage.getItem("ladya-theme") || "light") === "dark")
     document.documentElement.classList.add("dark");
 } catch (e) {}
+</script>
+<script>
+// Client-side cross-origin isolation: the service worker adds the COOP/COEP
+// headers GitHub Pages cannot send, which enables SharedArrayBuffer and the
+// multi-threaded engine build. Reloads once after registration; the
+// sessionStorage guard prevents reload loops if isolation is not granted.
+(function () {
+  try {
+    if (typeof crossOriginIsolated !== "undefined" && crossOriginIsolated) return;
+    if (!window.isSecureContext || !navigator.serviceWorker) return;
+    if (sessionStorage.getItem("ladya-coi")) return; // already retried this tab
+    var FLAG = "ladya-coi";
+    function done() { try { sessionStorage.setItem(FLAG, String(Date.now())); } catch (e) {} }
+    var reloaded = false;
+    function reloadOnce() {
+      if (reloaded) return;
+      reloaded = true;
+      done();
+      location.reload();
+    }
+    navigator.serviceWorker.register("coi-sw.js", { scope: "./" }).then(function (reg) {
+      if (navigator.serviceWorker.controller) { reloadOnce(); return; }
+      var w = reg.installing || reg.waiting;
+      function onActive(r) { if (r && r.state === "activated") reloadOnce(); }
+      if (reg.active) reloadOnce();
+      if (w) {
+        w.addEventListener("statechange", function () { onActive(w); });
+      } else {
+        reg.addEventListener("updatefound", function () {
+          var n = reg.installing;
+          if (n) n.addEventListener("statechange", function () { onActive(n); });
+        });
+      }
+      navigator.serviceWorker.addEventListener("controllerchange", reloadOnce);
+      // last resort: the worker may be active but slow to claim
+      setTimeout(reloadOnce, 2500);
+    }).catch(function () {});
+  } catch (e) {}
+})();
 </script>
 </head>
 <body>
@@ -46,15 +85,15 @@ try {
 <script src="js/util.js?v=8"></script>
 <script src="js/time.js?v=1"></script>
 <script src="js/api.js?v=10"></script>
-<script src="js/exporter.js?v=2"></script>
+<script src="js/exporter.js?v=3"></script>
 <script src="js/pieces.js?v=1"></script>
-<script src="js/board.js?v=6"></script>
-<script src="js/engine.js?v=3"></script>
-<script src="js/analysis.js?v=3"></script>
+<script src="js/board.js?v=7"></script>
+<script src="js/engine.js?v=5"></script>
+<script src="js/analysis.js?v=4"></script>
 <script src="js/lobby.js?v=8"></script>
-<script src="js/game.js?v=14"></script>
-<script src="js/replay.js?v=4"></script>
-<script src="js/pages.js?v=10"></script>
+<script src="js/game.js?v=15"></script>
+<script src="js/replay.js?v=5"></script>
+<script src="js/pages.js?v=11"></script>
 <script src="js/community.js?v=8"></script>
 <script src="js/chat.js?v=8"></script>
 <script src="js/app.js?v=8"></script>

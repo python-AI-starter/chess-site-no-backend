@@ -24,27 +24,45 @@ generation.
 
 ## Quick start
 
-The Supabase project is already configured (schema applied, keys set in
-`js/config.js`), so serving the static files is enough:
+The site is fully serverless: a static frontend hosted on GitHub Pages plus
+Supabase (PostgreSQL 17, Auth, Realtime). The Supabase project is already
+configured (schema applied, keys set in `js/config.js`), so publishing the
+folder as a GitHub Pages site is the whole deployment:
+
+1. Push the site files to a GitHub repository.
+2. Repository Settings -> Pages -> deploy from the branch that holds the
+   files (root). GitHub Pages serves the site over HTTPS automatically.
+3. In Supabase, Authentication -> URL Configuration, set the Site URL to
+   the Pages address and add it to Redirect URLs, so confirmation email
+   links lead back to the site.
+
+No build step and no server code are required. For a local preview any
+static file server works (localhost is a secure context, so everything
+including the engine runs there too):
 
 ```bash
-# port 3000 is recommended: the confirmation email links to it
-python3 -m http.server 3000    # in the site folder -> http://localhost:3000
-# any other static host or port works too, but see the note below
+python3 -m http.server 8000     # or: npx serve .
 ```
 
-1. Sign up (email plus password, nickname 2-20 characters).
-2. Follow the link from the confirmation email: you are signed in
-   automatically, no login form needed (the session is picked up from
-   the URL, `detectSessionInUrl`).
-3. Use Quick pairing to find an opponent from the queue, or create a
-   link challenge and send it to a friend.
+### Engine multithreading without server code
 
-If emails are not delivered: in the Supabase dashboard, Authentication,
-turn "Confirm email" OFF and sign-in works right after signup. If the
-site will not live on localhost:3000, set the site address as the Site
-URL in Authentication, URL Configuration (and add it to Redirect URLs)
-so email links lead back to it.
+The multi-threaded Stockfish build needs SharedArrayBuffer, and browsers
+only expose it to a cross-origin isolated page. Static hosts such as
+GitHub Pages cannot add the required response headers, so the site
+generates them in the client: `coi-sw.js` is a small service worker that
+intercepts page navigations and adds
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+to the response itself. The inline bootstrap in `index.html` registers the
+worker and reloads the page once; from then on every load is cross-origin
+isolated and the multi-threaded engine runs at full speed. Nothing is
+needed from the hosting side; if a browser blocks service workers, the
+engine transparently falls back to the single-threaded build with threads
+fixed at 1.
 
 ## Features
 
@@ -131,20 +149,39 @@ so email links lead back to it.
   database never sees any engine traffic. The web worker is created
   from the cached loader, so reopening analysis after closing the tab
   neither re-downloads nor re-instantiates anything; the worker itself
-  stays alive for the whole page session. Available on the standalone
+  stays alive for the whole page session. The UCI bridge is hardened
+  for long sessions: options are confirmed with a readyok handshake
+  before every search (a Threads change followed by an immediate
+  search can otherwise deadlock the build), a watchdog rebuilds the
+  worker from the cache and replays the search if the engine ever goes
+  silent, and positions impossible in a real game (a hand-typed FEN
+  where the side not to move is already in check) are refused with a
+  hint instead of being searched. Available on the standalone
   analysis board (#/analysis), on finished game pages (a toggle next
   to the move list), and right inside the leaderboard "Watch" replay.
-  The panel shows a Lichess-style evaluation bar, numbered SAN
-  variations, depth and speed, best-move arrows on the board, and a
-  gear menu with the search time per move (infinite or fixed), the
-  number of variations (MultiPV 1-5), threads, and the hash memory
-  size; settings persist in localStorage. The multi-threaded build is
-  used automatically when the browser is cross-origin isolated,
-  otherwise the single-threaded build runs and threads stay at 1.
+  The panel follows the Lichess layout everywhere: a vertical
+  evaluation bar with a midpoint mark next to the board, the engine
+  box at the very top of the side column (no scrolling needed), the
+  move list in the middle, the interface buttons at the bottom, and
+  the FEN/PGN fields directly under the board. It shows numbered SAN
+  variations, depth and speed, and a gear menu with the search time
+  per move (infinite or fixed), the number of variations (MultiPV
+  1-5), threads, and the hash memory size; settings persist in
+  localStorage. The best move is drawn on the board as a light-blue
+  arrow (lighter than the Alt-drawn mark), MultiPV runner-ups as gray
+  arrows that fade with each worse line, up to five in total. The
+  multi-threaded build is used automatically when the browser is
+  cross-origin isolated, which the site provides in the client via the
+  coi-sw.js service worker (no server code needed, works on GitHub
+  Pages, see Quick start); threads default to half the
+  CPU cores with an Auto option in the gear menu, and without
+  isolation the single-threaded build runs with threads at 1.
 - Analysis board (#/analysis, link in the navbar): free board for both
-  colors, move list with keyboard navigation, FEN loading from a
-  query parameter (#/analysis?fen=...) or an input field, move undo,
-  position reset, and FEN/PGN export of the line.
+  colors, move list with keyboard navigation, FEN loading from a query
+  parameter (#/analysis?fen=...) or by pasting it into the inline field
+  under the board (it applies itself, no load button), move undo,
+  position reset, and the same inline PGN field for importing a game or
+  copying the current line.
 - Open challenges mirror the quick-pairing queue: the list shows every
   player searching through "Быстрая игра" (the seeks table, publicly
   readable, so guests see it too). Own seeks appear in the list at
@@ -210,7 +247,10 @@ decides everything:
 ## Structure
 
 ```text
-index.html              entry point
+index.html              entry point; registers coi-sw.js for client-side
+                        cross-origin isolation (SharedArrayBuffer)
+coi-sw.js               service worker adding the COOP/COEP headers to page
+                        navigations: engine multithreading with no server code
 css/style.css           styles, Lichess-inspired
 js/config.js            Supabase URL and publishable key
 js/i18n.js              language detection (ru/zh/en), dictionaries, server-message translation
@@ -221,11 +261,13 @@ js/api.js               Supabase client, RPC wrappers, Realtime helpers
 js/exporter.js          FEN/PGN export (chess.js PGN builder, copy/download modal)
 js/engine.js            Stockfish 19 WASM host: CDN fetch, Cache Storage,
                         blob worker, UCI bridge
-js/analysis.js          engine analysis panel (eval, MultiPV lines, gear
-                        menu) and the #/analysis board page
+js/analysis.js          engine analysis panel (vertical eval bar, MultiPV
+                        lines, gear menu), the #/analysis board page, and
+                        the inline auto-applying FEN/PGN fields
 js/time.js              conservative server-time synchronization
 js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
-js/board.js             board rendering, click-click and drag&drop, arrows and circles
+js/board.js             board rendering, click-click and drag&drop, arrows
+                        and circles (manual marks plus engine arrows)
 js/game.js              game page: clocks, Realtime, chat, actions, replay
 js/replay.js            replay component (controls, autoplay, move list)
 js/lobby.js             quick pairing, challenges, global chat on the home page
@@ -252,9 +294,10 @@ sql/11_admin_moderation.sql  creator/admin roles, mutes, deletions, bans
 ## Installing on a fresh Supabase project
 
 1. SQL Editor: run `sql/01` through `sql/08` in order, then the rest if
-   moderation and the quick-pairing fix are wanted.
+   moderation and the quick-pairing fix are wanted. The `sql/` folder in
+   the repository always mirrors the live database.
 2. Authentication: enable Email, optionally disable confirmation; set
-   Site URL to the site address (http://localhost:3000 for local runs).
+   Site URL to the site address (the GitHub Pages URL for production).
 3. Put the URL and publishable key into `js/config.js`.
 4. Realtime is enabled automatically through the `supabase_realtime`
    publication in `02_schema.sql`.

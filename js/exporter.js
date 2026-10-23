@@ -84,6 +84,24 @@
 
   Exporter.resultOf = resultOf;
 
+  // Parse PGN text into {startFen, moves:[{u,s,fenAfter}]} for the inline
+  // PGN fields; returns null when the text is not a readable game
+  Exporter.parsePgn = function (text) {
+    if (!text || !String(text).trim()) return null;
+    const c = new window.Chess();
+    try { c.loadPgn(String(text), { strict: false }); } catch (e) { return null; }
+    const hist = c.history({ verbose: true });
+    if (!hist.length) return null;
+    return {
+      startFen: hist[0].before,
+      moves: hist.map(m => ({
+        u: m.from + m.to + (m.promotion || ""),
+        s: m.san,
+        fenAfter: m.after
+      }))
+    };
+  };
+
   // Copy text to the clipboard with a toast fallback
   Exporter.copyText = async function (text) {
     let done = false;

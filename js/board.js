@@ -10,6 +10,9 @@
 // draws a circle. Plain is green, Alt is blue, Ctrl/Shift is red.
 // Redrawing the same mark removes it. Arrows and circles may coexist;
 // a left-click on the board clears them all.
+// The engine panel draws its own marks: the best move is light blue
+// (lighter than the Alt arrow), MultiPV runners-up are gray and fade
+// with each worse line, up to five arrows total.
 // Touch devices: touch-action:none plus pointercancel handling keep
 // drag-and-drop working without page scrolling.
 (function () {
@@ -17,11 +20,19 @@
 
   const FILES = "abcdefgh";
 
-  // mark colors (Lichess palette)
+  // mark colors (Lichess palette). A value is either a plain color or
+  // {fill, opacity} for marks that need their own transparency
   const MARK_COLORS = {
     green: "#15781b",
     red: "#882020",
-    blue: "#003088"
+    blue: "#003088",
+    // engine arrows: best move is a light blue, the further down the
+    // MultiPV list a line is, the lighter and less visible its arrow
+    engine1: { fill: "#5fa8ee", opacity: 0.95 },
+    engine2: { fill: "#8f8f8f", opacity: 0.80 },
+    engine3: { fill: "#9e9e9e", opacity: 0.60 },
+    engine4: { fill: "#adadad", opacity: 0.42 },
+    engine5: { fill: "#bcbcbc", opacity: 0.28 }
   };
   const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -238,8 +249,9 @@
       while (svg.firstChild) svg.removeChild(svg.firstChild);
       const isArrow = (m) => m.from !== undefined;
       const draw = (m, preview) => {
-        const color = MARK_COLORS[m.color] || MARK_COLORS.green;
-        const opacity = preview ? "0.45" : "0.8";
+        const mark = MARK_COLORS[m.color] || MARK_COLORS.green;
+        const color = typeof mark === "string" ? mark : mark.fill;
+        const opacity = preview ? "0.45" : (typeof mark === "string" ? "0.8" : String(mark.opacity));
         if (isArrow(m)) {
           if (m.from === m.to) return;
           const g = document.createElementNS(SVG_NS, "polygon");
