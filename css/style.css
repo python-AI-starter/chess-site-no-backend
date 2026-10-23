@@ -541,3 +541,26 @@ html.dark .eval-bar-v .ebv-white { background: #f2f0ec; }
 
 /* standalone analysis board */
 #ab-replaybar { margin-bottom: 6px; }
+
+/* board editor */
+.ed-tray { display: flex; justify-content: center; margin: 4px 0; }
+.ed-tray-row { display: flex; gap: 2px; flex-wrap: wrap; justify-content: center; }
+.ed-piece-btn {
+  width: 40px; height: 40px; padding: 2px; border: 1px solid transparent;
+  border-radius: 6px; background: transparent; cursor: pointer; position: relative;
+}
+.ed-piece-btn:hover { background: var(--panel2); border-color: var(--line); }
+.ed-piece-btn.active { background: var(--hl); border-color: var(--accent); }
+.ed-piece-btn .piece { cursor: pointer; }
+.ed-checks { display: flex; flex-direction: column; gap: 4px; }
+.ed-check-group { display: flex; align-items: center; gap: 10px; }
+.ed-check-group > span { width: 16px; text-align: center; }
+.ed-check {
+  display: inline-flex; align-items: center; gap: 6px; font-weight: 400;
+  font-size: 14px; margin: 0; cursor: pointer; white-space: nowrap;
+}
+.ed-check input { width: auto; margin: 0; }
+.ed-radios { display: flex; gap: 10px; flex-wrap: wrap; }
+.ed-turn .btn { flex: 1; }
+.ed-turn .btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+#ed-trash.active { background: var(--bad); color: #fff; border-color: var(--bad); }

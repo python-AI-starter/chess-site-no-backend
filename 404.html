@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ladya</title>
+<script>
+// Static hosts answer a deep link to a client-side route (/forum,
+// /editor/<fen>, ...) with this page. The app base directory is discovered
+// by probing for its service worker file from the deepest path segment
+// upward, the requested route is handed over through sessionStorage, and
+// the browser is sent to the real entry point, which restores the route on
+// a clean path. Works for root and subpath deployments.
+(function () {
+  try {
+    var segs = location.pathname.split("/");
+    var candidates = [];
+    for (var i = segs.length - 1; i >= 2; i--) {
+      var base = segs.slice(0, i).join("/") + "/";
+      if (base && base !== "/") candidates.push(base);
+    }
+    candidates.push("/");
+    var idx = 0;
+    function go(base) {
+      var rest = location.pathname.slice(base.length - 1) || "/";
+      try { sessionStorage.setItem("ladya-handoff", rest + location.search); } catch (e) {}
+      location.replace(base);
+    }
+    function probe() {
+      if (idx >= candidates.length) { location.replace("/"); return; }
+      var base = candidates[idx++];
+      fetch(base + "coi-sw.js", { cache: "no-store" }).then(function (r) {
+        if (!r.ok) { probe(); return; }
+        r.text().then(function (txt) {
+          if (txt.indexOf("Cross-Origin-Opener-Policy") >= 0) go(base);
+          else probe();
+        }).catch(probe);
+      }).catch(probe);
+    }
+    probe();
+  } catch (e) { location.replace("/"); }
+})();
+</script>
+</head>
+<body></body>
+</html>

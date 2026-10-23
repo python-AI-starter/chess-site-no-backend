@@ -237,7 +237,7 @@
       const { data, error } = await API.sb.from("profiles")
         .select("id,username").ilike("username", name).limit(1);
       if (error || !data || !data.length) return U.toast(t("dm.notFound"), "error");
-      location.hash = `#/dm/${data[0].id}`;
+      App.go(`/dm/${data[0].id}`);
     });
 
     const box = U.qs("#dm-list");

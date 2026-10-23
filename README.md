@@ -38,11 +38,29 @@ folder as a GitHub Pages site is the whole deployment:
 
 No build step and no server code are required. For a local preview any
 static file server works (localhost is a secure context, so everything
-including the engine runs there too):
+including the engine runs there too); the file server should fall back
+to index.html for unknown paths so the clean routes resolve directly:
 
 ```bash
-python3 -m http.server 8000     # or: npx serve .
+python3 -m http.server 8000     # or: npx serve -s .
 ```
+
+## Routing
+
+Navigation uses the History API: every tab lives on a plain path
+(/forum, /dm, /game/<id>, /editor/<fen>) with no hash. Three pieces
+make that work on a static host with no server code:
+
+- the router renders from location.pathname and pushes clean paths;
+- after the service worker is installed, coi-sw.js answers navigations
+  to unknown paths with index.html (plus a <base> tag with the app root,
+  so assets resolve at any route depth and on project-page subpaths);
+- before the worker is installed, 404.html catches deep links, finds the
+  app base by probing for the service worker file and hands the route
+  over to the entry point through sessionStorage.
+
+Old #/... bookmarks and stored #/game/... message links are normalized
+to the clean path on load.
 
 ### Engine multithreading without server code
 
@@ -157,8 +175,13 @@ fixed at 1.
   silent, and positions impossible in a real game (a hand-typed FEN
   where the side not to move is already in check) are refused with a
   hint instead of being searched. Available on the standalone
-  analysis board (#/analysis), on finished game pages (a toggle next
+  analysis board (/analysis), on finished game pages (a toggle next
   to the move list), and right inside the leaderboard "Watch" replay.
+  A game that ended by the rules of chess (checkmate, stalemate,
+  fifty-move rule, insufficient material, threefold repetition) shows
+  "Game over" in the panel instead of a thinking state, and the
+  Stockfish worker is never created for it; endings decided by the
+  players (resign, flag, agreement) keep the engine available.
   The panel follows the Lichess layout everywhere: a vertical
   evaluation bar with a midpoint mark next to the board, the engine
   box at the very top of the side column (no scrolling needed), the
@@ -176,12 +199,27 @@ fixed at 1.
   Pages, see Quick start); threads default to half the
   CPU cores with an Auto option in the gear menu, and without
   isolation the single-threaded build runs with threads at 1.
-- Analysis board (#/analysis, link in the navbar): free board for both
+- Analysis board (/analysis, link in the navbar): free board for both
   colors, move list with keyboard navigation, FEN loading from a query
-  parameter (#/analysis?fen=...) or by pasting it into the inline field
+  parameter (/analysis?fen=...) or by pasting it into the inline field
   under the board (it applies itself, no load button), move undo,
   position reset, and the same inline PGN field for importing a game or
   copying the current line.
+- Board editor (/editor, link in the navbar): Lichess-style position
+  setup. Pieces of both colors sit in trays above and below the board;
+  a click loads a piece for placement (clicks or drags place copies),
+  board pieces move by drag or click-click, right-click deletes, and
+  the trash tool deletes with a left click (sweeping works too). Flip,
+  start position and clear board buttons, plus a side-to-move toggle.
+  Castling checkboxes (O-O and O-O-O per side) exist only while the
+  required king and rook stand on their original squares; moving them
+  away removes the option entirely. The en passant control lists every
+  square the side to move can capture on (for a white pawn on e5 with
+  black pawns on d5 and f5 that is none, d6 or f6), none by default.
+  The FEN field applies a pasted or edited position after Enter, the
+  URL field holds a /editor/<fen> link that reopens the exact position
+  and rules, and the analyze button sends the position to the analysis
+  board with castling, en passant and turn intact.
 - Open challenges mirror the quick-pairing queue: the list shows every
   player searching through "Быстрая игра" (the seeks table, publicly
   readable, so guests see it too). Own seeks appear in the list at
@@ -250,7 +288,13 @@ decides everything:
 index.html              entry point; registers coi-sw.js for client-side
                         cross-origin isolation (SharedArrayBuffer)
 coi-sw.js               service worker adding the COOP/COEP headers to page
-                        navigations: engine multithreading with no server code
+                        navigations: engine multithreading with no server code;
+                        also serves index.html for client-side routes and
+                        injects a <base> tag, which makes clean paths like
+                        /forum work on any static host
+404.html                hands first-visit deep links (/forum, /editor/<fen>)
+                        over to the entry point; needed before the service
+                        worker is installed, e.g. on GitHub Pages
 css/style.css           styles, Lichess-inspired
 js/config.js            Supabase URL and publishable key
 js/i18n.js              language detection (ru/zh/en), dictionaries, server-message translation
@@ -262,8 +306,10 @@ js/exporter.js          FEN/PGN export (chess.js PGN builder, copy/download moda
 js/engine.js            Stockfish 19 WASM host: CDN fetch, Cache Storage,
                         blob worker, UCI bridge
 js/analysis.js          engine analysis panel (vertical eval bar, MultiPV
-                        lines, gear menu), the #/analysis board page, and
+                        lines, gear menu), the /analysis board page, and
                         the inline auto-applying FEN/PGN fields
+js/editor.js            board editor page (/editor): piece trays, trash,
+                        castling and en passant rules, FEN/URL fields
 js/time.js              conservative server-time synchronization
 js/pieces.js            cburnett pieces (inline SVG, CC-BY-SA 3.0)
 js/board.js             board rendering, click-click and drag&drop, arrows
@@ -274,7 +320,8 @@ js/lobby.js             quick pairing, challenges, global chat on the home page
 js/pages.js             login/signup, profile, leaderboard (pulse, replays)
 js/community.js         forum, clubs with club chat, blog
 js/chat.js              global chat and direct messages
-js/app.js               router, navbar, heartbeat, instant rendering
+js/app.js               router (History API clean paths, no hash), navbar,
+                        heartbeat, instant rendering
 vendor/supabase.js      supabase-js v2 (UMD, local)
 vendor/chess.js         chess.js 1.4.0 (MIT, local): legal moves,
                         premove validation, and replay on the client

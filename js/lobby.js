@@ -232,7 +232,7 @@
         U.toast(error.message, "error");
         return;
       }
-      if (data) { location.hash = `#/game/${data}`; return; }
+      if (data) { App.go(`/game/${data}`); return; }
       // the cancel button was pressed while the RPC was running: the seek
       // it just created has to be removed too
       if (cancelRequested) { cancelRequested = false; await API.cancelSeek(); return; }
@@ -241,7 +241,7 @@
         const { data: games } = await API.sb.from("games")
           .select("id").or(`white.eq.${me.id},black.eq.${me.id}`)
           .eq("status", "active").limit(1);
-        if (games && games.length) { stopSeek(); location.hash = `#/game/${games[0].id}`; }
+        if (games && games.length) { stopSeek(); App.go(`/game/${games[0].id}`); }
       }, 2500);
     }
     // single cancel path for both panels: clears the search status and
@@ -280,7 +280,7 @@
       const color = U.qs("#ch-color").value;
       const { data, error } = await API.createChallenge(min * 60000, inc * 1000, rated, color);
       if (error) return U.toast(error.message, "error");
-      location.hash = `#/game/${data}`;
+      App.go(`/game/${data}`);
     });
 
     // open challenges: refresh via seeks realtime plus polling, so the

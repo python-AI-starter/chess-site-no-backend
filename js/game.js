@@ -243,7 +243,11 @@
           S.panel = new AnalysisPanel(U.qs("#analysis-box", root), {
             getFen: currentFen,
             getBoard: () => S.board,
-            getBarSlot: () => U.qs("#game-eval-slot", root)
+            getBarSlot: () => U.qs("#game-eval-slot", root),
+            // a game finished by the rules of chess (checkmate, stalemate,
+            // ...) keeps the panel but never starts Stockfish
+            isFinal: () => !!S.g && S.g.status === "finished" &&
+                           App.ruleEnds.includes(S.g.reason)
           });
         }
         S.panel.sync();
@@ -464,7 +468,7 @@
       const c = U.qs("#status-card", root);
       if (g.status === "waiting") {
         const isHost = me && (g.white === me.id || g.black === me.id);
-        const link = `${location.origin}${location.pathname}#/game/${g.id}`;
+        const link = `${location.origin}${App.base}game/${g.id}`;
         const kind = g.rated ? t("lobby.rated").toLowerCase() : t("challenge.casual").toLowerCase();
         c.innerHTML = `
           <div class="result-banner waiting">${U.esc(t("game.waitingOpponent"))}</div>
@@ -494,7 +498,7 @@
           U.qs("#cancel-wait", c).addEventListener("click", async () => {
             if (!(await U.confirmModal(t("game.cancelChallengeQ"), t("game.cancelChallengeText"), t("common.cancel")))) return;
             const { error } = await API.cancelWaiting(g.id);
-            if (error) U.toast(error.message, "error"); else location.hash = "#/";
+            if (error) U.toast(error.message, "error"); else App.go("/");
           });
         }
         return;
@@ -618,7 +622,7 @@
         const g = S.g;
         const { data, error } = await API.createChallenge(g.initial_ms, g.increment_ms, g.rated, "random");
         if (error) return U.toast(error.message, "error");
-        location.hash = `#/game/${data}`;
+        App.go(`/game/${data}`);
       });
     }
 

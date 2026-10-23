@@ -175,6 +175,9 @@
   //   getFen()     -> current FEN to analyze
   //   getBoard()   -> ChessBoard instance for arrows (optional)
   //   getBarSlot() -> element for the vertical eval bar (optional)
+  //   isFinal()    -> true when the watched game ended by the rules of
+  //                   chess (checkmate, stalemate, ...): the panel then
+  //                   shows "game over" and the engine never starts
   class AnalysisPanel {
     constructor(el, opts) {
       this.el = el;
@@ -226,12 +229,17 @@
 
     toggle() { this.on ? this.turnOff() : this.turnOn(); }
 
+    // the watched game ended by the rules of chess: there is nothing to
+    // search, so the Stockfish worker is not created and no download starts
+    _final() { return !!(this.opts.isFinal && this.opts.isFinal()); }
+
     async turnOn() {
       setWasOn(true);
       this.on = true;
       this.illegal = false;
       this._renderLines(true);
       this._drawStatus();
+      if (this._final()) { this._stopForFinal(); return; }
       try {
         await EngineHost.ensure();
         if (!this.on) return;
@@ -242,6 +250,16 @@
         this._drawStatus();
         U.toast(e.message || String(e), "error");
       }
+    }
+
+    // clear everything the engine would have produced and keep the panel
+    // showing the "game over" note
+    _stopForFinal() {
+      EngineHost.stopSearch();
+      this.lines = {};
+      this.maxDepth = 0;
+      this._clearArrows();
+      this._renderLines(true);
     }
 
     turnOff() {
@@ -281,6 +299,7 @@
     }
 
     _search() {
+      if (this._final()) { this._stopForFinal(); return; }
       const fen = this.opts.getFen ? this.opts.getFen() : null;
       if (!fen) return;
       this.illegal = !searchableFen(fen);
@@ -302,7 +321,7 @@
     }
 
     _onUci(line) {
-      if (!this.on || this.illegal) return;   // an illegal position is never searched
+      if (!this.on || this.illegal || this._final()) return;   // an illegal position is never searched
       if (/^bestmove/.test(line)) { this._renderSoon(true); return; }
       const info = parseInfo(line);
       if (!info) return;
@@ -419,8 +438,11 @@
       }
       const idxs = Object.keys(this.lines).map(Number).sort((a, b2) => a - b2);
       if (!idxs.length) {
-        const msg = !this.on ? t("analysis.engineOff") : this.illegal ? t("analysis.illegalPos") : t("analysis.thinking");
-        box.innerHTML = reset || !this.on || this.illegal
+        const msg = !this.on ? t("analysis.engineOff")
+          : this.illegal ? t("analysis.illegalPos")
+          : this._final() ? t("analysis.gameOver")
+          : t("analysis.thinking");
+        box.innerHTML = reset || !this.on || this.illegal || this._final()
           ? `<div class="empty muted small">${U.esc(msg)}</div>`
           : box.innerHTML;
         return;
@@ -521,10 +543,10 @@
           s.hash = Number(U.qs("#sf-hash", m).value) || 32;
           root.innerHTML = "";
           saveSettings(s);
-          if (this.on &&
+          if (this.on && !this._final() &&
               (prev.movetime !== s.movetime || prev.multipv !== s.multipv ||
                prev.threads !== s.threads || prev.hash !== s.hash)) {
-            this._applyEngineSettings().then(() => this._search());   // restart the search so the settings take effect
+            this._applyEngineSettings().then(() => this._search()).catch(() => {});   // restart the search so the settings take effect
           }
         }
       });

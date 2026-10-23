@@ -41,7 +41,7 @@
       const { error } = await API.signIn(email, pass);
       if (error) { U.qs("#l-err").textContent = I18n.s(error.message); return; }
       U.toast(t("auth.loggedIn"), "good");
-      location.hash = "#/";
+      App.go("/");
       App.refreshNav();
     }
   };
@@ -70,13 +70,13 @@
       if (error) { U.qs("#s-err").textContent = I18n.s(error.message); return; }
       if (data.session) {
         U.toast(t("auth.created"), "good");
-        location.hash = "#/";
+        App.go("/");
         App.refreshNav();
       } else {
         U.infoModal(`<h3>${U.esc(t("auth.confirmEmailTitle"))}</h3>
           <p>${t("auth.confirmEmailText", { email: U.esc(email) })}</p>
           <p class="muted small">${t("auth.confirmEmailNote")}</p>`);
-        location.hash = "#/login";
+        App.go("/login");
       }
     }
   };
@@ -109,7 +109,7 @@
       t("challenge.dm", { tc: U.fmtTc(ms, inc), kind: rated ? t("challenge.rated").toLowerCase() : t("challenge.casual").toLowerCase(), id: gid }))
       .then(({ error: e2 }) => { if (e2) console.warn(e2.message); });
     U.toast(t("challenge.sent"), "good");
-    location.hash = `#/game/${gid}`;
+    App.go(`/game/${gid}`);
   }
 
   // profile
@@ -191,7 +191,7 @@
 
     if (!own && me) {
       const dmBtn = U.qs("#p-dm");
-      if (dmBtn) dmBtn.addEventListener("click", () => { location.hash = `#/dm/${p.id}`; });
+      if (dmBtn) dmBtn.addEventListener("click", () => { App.go(`/dm/${p.id}`); });
       const chBtn = U.qs("#p-challenge");
       if (chBtn) chBtn.addEventListener("click", () => challengeModal(p));
       U.qs("#p-block").addEventListener("click", async () => {
@@ -280,7 +280,7 @@
             t("mod.delAccText"), t("mod.delAccConfirm")))) return;
         const { error } = await API.adminDeleteAccount(p.id);
         if (error) U.toast(error.message, "error");
-        else { U.toast(t("mod.accDeleted"), "good"); location.hash = "#/"; }
+        else { U.toast(t("mod.accDeleted"), "good"); App.go("/"); }
       });
     }
 
@@ -356,7 +356,7 @@
     slot.innerHTML = `<div class="center" style="padding:10px"><span class="spinner"></span> ${U.esc(t("common.loading"))}</div>`;
     // moves and the start FEN come straight from the table; positions are computed client-side with chess.js
     const { data, error } = await API.sb.from("games")
-      .select("start_fen,moves").eq("id", gameId).maybeSingle();
+      .select("start_fen,moves,reason").eq("id", gameId).maybeSingle();
     if (error || !data) {
       slot.innerHTML = `<div class="empty">${U.esc(t("rp.loadError"))}</div>`;
       return;
@@ -452,7 +452,7 @@
         }
         try { sessionStorage.setItem("ladya-analysis-fen", fen); } catch (e) {}
         U.toast(t("analysis.fenNotFound"), "");
-        location.hash = "#/analysis";
+        App.go("/analysis");
         return true;
       }
     });
@@ -466,7 +466,7 @@
       apply: () => {
         try { sessionStorage.setItem("ladya-analysis-pgn", pgnInput.value.trim()); } catch (e) {}
         U.toast(t("analysis.pgnImported"), "good");
-        location.hash = "#/analysis";
+        App.go("/analysis");
         return true;
       }
     });
@@ -479,7 +479,9 @@
     openReplayPanel = new AnalysisPanel(U.qs(".rp-engine", wrap), {
       getFen: () => openReplay.fenAt(openReplay.ply),
       getBoard: () => openReplay.board,
-      getBarSlot: () => U.qs(".an-eval-slot", wrap)
+      getBarSlot: () => U.qs(".an-eval-slot", wrap),
+      // rule-ended games (checkmate, stalemate, ...) never start the engine
+      isFinal: () => !!(meta && meta.reason && App.ruleEnds.includes(meta.reason))
     });
   }
 
@@ -492,7 +494,7 @@
         .select(`id,username,rating,games,wins,losses,draws,is_banned,last_seen_at,${pool.col},${pool.games}`)
         .order(pool.col, { ascending: false }).limit(50),
       API.sb.from("games")
-        .select("id,white,black,result,winner,initial_ms,increment_ms,rated,finished_at,wp:profiles!games_white_fkey(username),bp:profiles!games_black_fkey(username)")
+        .select("id,white,black,result,winner,reason,initial_ms,increment_ms,rated,finished_at,wp:profiles!games_white_fkey(username),bp:profiles!games_black_fkey(username)")
         .eq("status", "finished")
         .order("finished_at", { ascending: false }).limit(12)
     ]);

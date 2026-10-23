@@ -113,7 +113,9 @@
       // isolated; if it fails to start, retry once with the single build
       const names = this._mtFailed ? buildNames(false) : buildNames(await isolated());
       this._mt = names.mt;
-      const cache = await caches.open(CACHE_NAME).catch(() => null);
+      // Cache Storage exists only in secure contexts; without it the
+      // binaries are just re-fetched on each open
+      const cache = ("caches" in window) ? await caches.open(CACHE_NAME).catch(() => null) : null;
 
       // fetch with progress, then cache; or take straight from the cache
       const get = async (file, phase) => {

@@ -146,11 +146,11 @@
         // deleting someone else's thread asks for a double confirmation
         if (!(await U.confirmDanger(t_("forum.delThreadQ"), "", t_("common.delete")))) return;
         const { error } = await API.adminDeleteThread(threadId);
-        if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
+        if (error) U.toast(error.message, "error"); else App.go("/forum");
       } else {
         if (!(await U.confirmModal(t_("forum.delThreadQ"), "", t_("common.delete")))) return;
         const { error } = await API.sb.from("forum_threads").delete().eq("id", threadId);
-        if (error) U.toast(error.message, "error"); else location.hash = "#/forum";
+        if (error) U.toast(error.message, "error"); else App.go("/forum");
       }
     });
     const send = U.qs("#r-send");
@@ -297,13 +297,13 @@
     if (del) del.addEventListener("click", async () => {
       if (!(await U.confirmModal(t("clubs.delQ"), t("common.irreversible"), t("common.delete")))) return;
       const { error } = await API.sb.from("clubs").delete().eq("id", clubId);
-      if (error) U.toast(error.message, "error"); else location.hash = "#/clubs";
+      if (error) U.toast(error.message, "error"); else App.go("/clubs");
     });
     const delMod = U.qs("#del-mod");
     if (delMod) delMod.addEventListener("click", async () => {
       if (!(await U.confirmDanger(t("clubs.delQ"), t("common.irreversible"), t("common.delete")))) return;
       const { error } = await API.adminDeleteClub(clubId);
-      if (error) U.toast(error.message, "error"); else location.hash = "#/clubs";
+      if (error) U.toast(error.message, "error"); else App.go("/clubs");
     });
     const editDesc = U.qs("#edit-desc");
     if (editDesc) editDesc.addEventListener("click", async () => {
@@ -495,7 +495,7 @@
       const { data, error } = await API.sb.from("blog_posts")
         .insert({ author_id: me.id, title, body }).select("id").single();
       if (error) return U.toast(error.message, "error");
-      location.hash = `#/blog/${data.id}`;
+      App.go(`/blog/${data.id}`);
     });
     return () => {};
   };
@@ -542,14 +542,14 @@
       U.qs("#b-del").addEventListener("click", async () => {
         if (!(await U.confirmModal(t("blog.delQ"), "", t("common.delete")))) return;
         const { error } = await API.sb.from("blog_posts").delete().eq("id", postId);
-        if (error) U.toast(error.message, "error"); else location.hash = "#/blog";
+        if (error) U.toast(error.message, "error"); else App.go("/blog");
       });
     }
     const delMod = U.qs("#b-del-mod");
     if (delMod) delMod.addEventListener("click", async () => {
       if (!(await U.confirmDanger(t("blog.delQ"), "", t("common.delete")))) return;
       const { error } = await API.adminDeleteBlogPost(postId);
-      if (error) U.toast(error.message, "error"); else location.hash = "#/blog";
+      if (error) U.toast(error.message, "error"); else App.go("/blog");
     });
     return () => {};
   };
