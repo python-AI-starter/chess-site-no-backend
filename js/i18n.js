@@ -1,5 +1,7 @@
-// Localization. The language is picked from the browser settings:
-// Russian or Chinese browsers get ru/zh, everything else gets English.
+// Localization. The language is picked from the browser settings by
+// walking the whole navigator.languages list from the primary entry to
+// the last fallback and taking the first entry the site speaks (ru, en
+// or zh). If none of the three appears anywhere, English is used.
 // Dictionaries live in locales/<lang>.json as flat key-value maps.
 // Server messages (PostgREST errors, RPC error fields) are translated
 // through an exact-match table with a few regex fallbacks.
@@ -14,6 +16,7 @@
     for (const l of langs) {
       const s = String(l || "").toLowerCase();
       if (s.startsWith("ru")) return "ru";
+      if (s.startsWith("en")) return "en";
       if (s.startsWith("zh")) return "zh";
     }
     return "en";

@@ -262,7 +262,7 @@
                 <div class="chat-log" id="club-chat-log"></div>
                 <div class="chat-input">
                   <input id="club-chat-text" maxlength="500" placeholder="${U.esc(t("chat.placeholder"))}">
-                  <button class="btn primary" id="club-chat-send">→</button>
+                  <button class="btn primary chat-send" id="club-chat-send" title="${U.esc(t('common.send'))}">${U.sendIcon()}</button>
                 </div>
               </div>`
             : `<div class="empty">${me ? U.esc(t("clubs.chatMembers")) : U.esc(t("clubs.chatGuest"))}</div>`}

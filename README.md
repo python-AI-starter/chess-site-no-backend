@@ -111,9 +111,11 @@ fixed at 1.
   handling keep drag-and-drop and premoves working on touchscreens.
 - Languages: the interface is localized into Russian, English, and
   Chinese (`locales/ru.json`, `locales/en.json`, `locales/zh.json`).
-  The language follows the browser settings: Russian or Chinese
-  browsers get their translation, everyone else gets English. Server
-  messages (database errors) are translated on the client as well.
+  The language follows the whole browser language list, from the primary
+  entry to the last fallback: the first entry the site speaks (ru, en,
+  or zh) wins, and if none of the three appears anywhere, English is
+  used. Server messages (database errors) are translated on the client
+  as well.
 - Theme: light and dark toggle in the navbar, choice persisted.
 - Clocks are server-backed; see below.
 - Game endings: checkmate, stalemate, resign, flag, threefold
@@ -147,8 +149,14 @@ fixed at 1.
   and only the creator manages admins.
 - Global chat on the home page (guests read, signing in to write,
   Realtime, rate limited) and direct messages: a dialog list with an
-  unread badge, live conversations, and clickable game links. Write and
-  Challenge buttons live in profiles.
+  unread badge, live conversations rendered as Lichess-style bubbles
+  (own messages in green on the right, the partner's in orange on the
+  left, no sender line), the full date and time on every message
+  instead of date separator blocks (a textual month name keeps the
+  day/month order unambiguous), multi-line input with Shift+Enter and
+  challenge and block buttons right in the dialog. Long messages wrap
+  inside the bubble for both sides. Write and Challenge buttons live
+  in profiles.
 - Online pulse: a heartbeat every 30 s lights a pulsing online
   indicator in leaderboards and profiles.
 - Replay: recent games on the leaderboard expand into a replay (board,
@@ -307,7 +315,9 @@ coi-sw.js               service worker adding the COOP/COEP headers to page
                         worker is installed, e.g. on GitHub Pages
 css/style.css           styles, Lichess-inspired
 js/config.js            Supabase URL and publishable key
-js/i18n.js              language detection (ru/zh/en), dictionaries, server-message translation
+js/i18n.js              language detection (first supported entry of the
+                        whole browser language list: ru/en/zh, else en),
+                        dictionaries, server-message translation
 locales/ru.json         Russian interface strings
 locales/en.json         English interface strings
 locales/zh.json         Chinese interface strings
@@ -331,7 +341,8 @@ js/replay.js            replay component (controls, autoplay, move list)
 js/lobby.js             quick pairing, challenges, global chat on the home page
 js/pages.js             login/signup, profile, leaderboard (pulse, replays)
 js/community.js         forum, clubs with club chat, blog
-js/chat.js              global chat and direct messages
+js/chat.js              global chat and direct messages (bubble thread with
+                        Shift+Enter, per-message date, challenge/block)
 js/app.js               router (History API clean paths, no hash), navbar,
                         heartbeat, instant rendering
 vendor/supabase.js      supabase-js v2 (UMD, local)

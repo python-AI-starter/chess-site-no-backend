@@ -200,7 +200,7 @@
             <div class="chat-log" id="chat-log"></div>
             <div class="chat-input">
               <input id="chat-text" maxlength="500" placeholder="${U.esc(t("chat.placeholder"))}">
-              <button class="btn primary" id="chat-send">→</button>
+              <button class="btn primary chat-send" id="chat-send" title="${U.esc(t('common.send'))}">${U.sendIcon()}</button>
             </div>
           </div>
         </div>

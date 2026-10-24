@@ -299,14 +299,50 @@ html.dark .premove-box { background: #3d2a24; border-color: #6a4436; }
 /* Chat */
 .chat-box { display: flex; flex-direction: column; height: 320px; }
 .chat-log { flex: 1; overflow-y: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font-size: 14px; }
-.chat-msg { margin: 4px 0; word-break: break-word; }
+.chat-msg { margin: 4px 0; word-break: break-word; overflow-wrap: anywhere; }
 .chat-msg b { color: var(--accent-dark); }
 /* clickable profile links in chats and lists */
 .chat-msg .user-link { font-weight: 700; color: var(--accent-dark); }
 .chat-msg.mine .user-link { color: var(--good); }
 .chat-msg .user-link:hover { text-decoration: underline; }
 .chat-msg.sys { color: var(--muted); font-style: italic; }
-.chat-input { display: flex; gap: 8px; margin-top: 8px; }
+.chat-input { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
+/* multiline input: no manual resize, grows with the text */
+.chat-input textarea { flex: 1; resize: none; max-height: 140px; }
+/* green send button with the Lichess-style triangle, same in every chat */
+.btn.primary.chat-send { background: var(--good); padding: 9px 13px; flex: none; }
+.btn.primary.chat-send:hover { background: #3f8a3f; filter: none; }
+.send-ico { width: 16px; height: 16px; fill: currentColor; display: block; }
+
+/* Direct messages: bubble log and the dialog header actions */
+.dm-log { display: flex; flex-direction: column; padding: 10px 12px; }
+.dm-msg { display: flex; margin: 3px 0; }
+.dm-msg.mine { justify-content: flex-end; }
+.dm-bubble {
+  max-width: min(85%, 620px);
+  padding: 6px 11px;
+  border-radius: 12px;
+  background: #f6e2bd;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.dm-msg.mine .dm-bubble { background: #d9e8c4; }
+.dm-meta { font-size: 11px; color: #8d8878; white-space: nowrap; margin-left: 7px; }
+html.dark .dm-bubble { background: #4a4335; }
+html.dark .dm-msg.mine .dm-bubble { background: #3c4a31; }
+html.dark .dm-meta { color: #a3a099; }
+.dm-actions { display: flex; align-items: center; gap: 4px; }
+.icon-btn {
+  background: transparent; border: 0; cursor: pointer; border-radius: 8px;
+  padding: 6px; line-height: 1; color: var(--accent-dark);
+}
+.icon-btn.danger { color: var(--bad); }
+.icon-btn:hover { background: var(--panel3); }
+.icon-btn:disabled { opacity: .5; cursor: default; }
+.icon-btn .ic { width: 19px; height: 19px; display: block; }
+.dm-note { margin-top: 8px; }
 
 /* Club */
 .club-layout { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }

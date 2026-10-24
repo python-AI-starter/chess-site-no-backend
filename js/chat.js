@@ -132,7 +132,7 @@
         }
         inp.innerHTML = `
           <input id="gchat-text" maxlength="500" placeholder="${U.esc(t("chat.placeholder"))}">
-          <button class="btn primary" id="gchat-send">→</button>`;
+          <button class="btn primary chat-send" id="gchat-send" title="${U.esc(t("common.send"))}">${U.sendIcon()}</button>`;
         const send = async () => {
           const inpEl = U.qs("#gchat-text", container);
           const body = inpEl.value.trim();
@@ -308,7 +308,10 @@
     return function () { if (stopPoll) stopPoll(); if (stopVisible) stopVisible(); API.unsubscribe(chan); };
   };
 
-  // Conversation thread
+  // Conversation thread: Lichess-style bubbles. Own messages are green
+  // bubbles on the right, the partner's are orange bubbles on the left;
+  // no sender line, every bubble carries its full date and time inline
+  // after the text. Long messages wrap inside the bubble for both sides.
   const ThreadPage_render = async function (container, partnerId) {
     const me = App.user || await API.user();
     if (!me) {
@@ -321,25 +324,40 @@
     if (!p) { container.innerHTML = `<div class="card center">${U.esc(t("dm.notFound"))}</div>`; return () => {}; }
     nameCache[p.id] = p.username;
 
+    // whether this player is blocked by me (UI only; the server rechecks)
+    let iBlocked = false;
+    {
+      const { data: blk } = await API.sb.from("blocked_users")
+        .select("blocked_id").eq("blocked_id", p.id).maybeSingle();
+      iBlocked = !!blk;
+    }
+
     container.innerHTML = `
       <p><a href="#/dm">${U.esc(t("dm.back"))}</a></p>
       <div class="card">
-        <div class="row">
-          <span class="avatar big">${U.esc((p.username || "?")[0].toUpperCase())}</span>
-          <div>
-            <h2 style="margin:0"><a href="#/profile/${p.id}">${U.esc(p.username)}</a>
-              ${p.is_banned ? `<span class="badge danger">${U.esc(t("profile.bannedBadge"))}</span>` : ""}
-              <span class="online-dot ${Pages.isOnline(p) ? "" : "off"}" title="${U.esc(t("status.online"))}"></span></h2>
-            <span class="muted small">${U.esc(t("dm.rating", { rating: p.rating }))}</span>
+        <div class="row spread dm-head">
+          <div class="row">
+            <a href="#/profile/${p.id}" title="${U.esc(t("dm.profileTitle", { name: p.username }))}"><span class="avatar big">${U.esc((p.username || "?")[0].toUpperCase())}</span></a>
+            <div>
+              <h2 style="margin:0"><a href="#/profile/${p.id}">${U.esc(p.username)}</a>
+                ${p.is_banned ? `<span class="badge danger">${U.esc(t("profile.bannedBadge"))}</span>` : ""}
+                <span class="online-dot ${Pages.isOnline(p) ? "" : "off"}" title="${U.esc(t("status.online"))}"></span></h2>
+              <span class="muted small">${U.esc(t("dm.rating", { rating: p.rating }))}</span>
+            </div>
+          </div>
+          <div class="dm-actions">
+            <button class="icon-btn" id="dm-challenge" title="${U.esc(t("dm.challengeTitle"))}">${U.iconSwords()}</button>
+            <button class="icon-btn danger" id="dm-block" title="${U.esc(iBlocked ? t("dm.unblockTitle") : t("dm.blockTitle"))}">${U.iconBan()}</button>
           </div>
         </div>
+        <div class="muted small dm-note hidden" id="dm-blocked-note">${U.esc(t("dm.blockedNote"))}</div>
       </div>
       <div class="card">
         <div class="chat-box tall">
-          <div class="chat-log" id="dm-log"></div>
+          <div class="chat-log dm-log" id="dm-log"></div>
           <div class="chat-input">
-            <input id="dm-text" maxlength="2000" placeholder="${U.esc(t("dm.placeholder"))}">
-            <button class="btn primary" id="dm-send">→</button>
+            <textarea id="dm-text" maxlength="2000" rows="1" placeholder="${U.esc(t("dm.placeholder"))}"></textarea>
+            <button class="btn primary chat-send" id="dm-send" title="${U.esc(t("dm.sendTitle"))}">${U.sendIcon()}</button>
           </div>
         </div>
       </div>`;
@@ -349,11 +367,39 @@
     let chan = null, stopPoll = null, stopVisible = null;
     let pending = [];              // own optimistic messages: [{body, el}]
 
+    // a bubble: text flows from the first line, the date and time sit
+    // inline at the end of the last line, so no row is left half-empty
+    function msgNode(m, mine, ts) {
+      return U.el(`<div class="dm-msg${mine ? " mine" : ""}"><div class="dm-bubble">${U.linkify(m.body)}<span class="dm-meta">${U.esc(U.fmtDateTime(ts))}</span></div></div>`);
+    }
+
+    function syncBlockedUi() {
+      U.qs("#dm-block").title = iBlocked ? t("dm.unblockTitle") : t("dm.blockTitle");
+      U.qs("#dm-blocked-note").classList.toggle("hidden", !iBlocked);
+      const ta = U.qs("#dm-text");
+      ta.disabled = iBlocked;
+      U.qs("#dm-send").disabled = iBlocked;
+    }
+    syncBlockedUi();
+
+    U.qs("#dm-challenge").addEventListener("click", () => Pages.challenge(p));
+    U.qs("#dm-block").addEventListener("click", async () => {
+      const btn = U.qs("#dm-block");
+      btn.disabled = true;
+      const { error } = iBlocked ? await API.unblockUser(p.id) : await API.blockUser(p.id);
+      btn.disabled = false;
+      if (error) return U.toast(error.message, "error");
+      API.invalidateBlocked();
+      iBlocked = !iBlocked;
+      syncBlockedUi();
+      U.toast(iBlocked ? t("profile.blocked") : t("profile.unblocked"), "good");
+    });
+
     function addMsg(m) {
       if (seen.has(m.id)) return;
       // own message already shown optimistically: treat the match as confirmation
       if (m.sender_id === me.id) {
-        const i = pending.findIndex(p => p.body === m.body);
+        const i = pending.findIndex(p2 => p2.body === m.body);
         if (i >= 0) {
           seen.add(m.id);
           pending.splice(i, 1);
@@ -361,14 +407,7 @@
         }
       }
       seen.add(m.id);
-      const mine = m.sender_id === me.id;
-      const who = mine
-        ? `<a class="user-link" href="#/profile/${me.id}">${U.esc(t("chat.youPrefix"))}</a>`
-        : `<a class="user-link" href="#/profile/${p.id}">${U.esc(p.username)}:</a>`;
-      const d = U.el(`<div class="chat-msg ${mine ? "mine" : ""}">
-        ${who} ${U.linkify(m.body)}
-        <span class="muted tiny">${U.fmtDate(m.created_at)}</span></div>`);
-      log.appendChild(d);
+      log.appendChild(msgNode(m, m.sender_id === me.id, m.created_at));
       log.scrollTop = log.scrollHeight;
     }
 
@@ -380,15 +419,25 @@
     if (!msgs || !msgs.length) log.innerHTML = `<div class="empty">${U.esc(t("dm.startChat"))}</div>`;
     await API.markDmsRead(p.id);
 
+    // Enter sends, Shift+Enter adds a line; the box grows with the text
+    const ta = U.qs("#dm-text");
+    function grow() {
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 140) + "px";
+    }
+    ta.addEventListener("input", grow);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+
     const send = async () => {
-      const inpEl = U.qs("#dm-text");
-      const body = inpEl.value.trim();
+      if (ta.disabled) return;
+      const body = ta.value.trim();
       if (!body) return;
-      inpEl.value = "";
+      ta.value = ""; grow();
       log.querySelector(".empty") && log.querySelector(".empty").remove();
       // optimistic: show instantly, RPC in the background
-      const tmp = U.el(`<div class="chat-msg mine"><a class="user-link" href="#/profile/${me.id}">${U.esc(t("chat.youPrefix"))}</a> ${U.linkify(body)}
-        <span class="muted tiny">${U.fmtDate(new Date().toISOString())}</span></div>`);
+      const tmp = msgNode({ body }, true, new Date().toISOString());
       log.appendChild(tmp);
       log.scrollTop = log.scrollHeight;
       const pend = { body, el: tmp };
@@ -399,7 +448,7 @@
         const i = pending.indexOf(pend);
         if (i >= 0) pending.splice(i, 1);
         U.toast(error.message, "error");
-        inpEl.value = body;
+        ta.value = body; grow();
         return;
       }
       if (res && res.message) seen.add(res.message.id); // no duplicates later
@@ -407,7 +456,6 @@
       if (i >= 0) pending.splice(i, 1);
     };
     U.qs("#dm-send").addEventListener("click", send);
-    U.qs("#dm-text").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
     // fresh fetch shared by fallback polling, reconnects, and tab returns; seen dedup prevents extra renders
     async function fetchFresh() {

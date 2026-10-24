@@ -590,6 +590,7 @@
 
   window.Pages = {
     login: LoginPage_render,
+    challenge: challengeModal,
     signup: SignupPage_render,
     profile: ProfilePage_render,
     leaderboard: LeaderboardPage_render,

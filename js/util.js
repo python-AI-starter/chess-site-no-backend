@@ -54,6 +54,36 @@
     return d.toLocaleString(I18n.locale(), { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
   };
 
+  // Day with a textual month name, year and time ("23 окт 2026, 11:56"),
+  // used on every direct message. A month name instead of a number keeps
+  // day/month order unambiguous for all locales.
+  const MONTHS_SHORT = {
+    ru: ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"],
+    en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+  };
+  U.fmtDateTime = function (ts) {
+    const d = new Date(typeof ts === "number" ? ts : U.parseTs(ts));
+    const hm = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    if (I18n.lang === "zh")
+      return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+    const mo = (MONTHS_SHORT[I18n.lang] || MONTHS_SHORT.en)[d.getMonth()];
+    if (I18n.lang === "ru") return `${d.getDate()} ${mo} ${d.getFullYear()}, ${hm}`;
+    return `${mo} ${d.getDate()}, ${d.getFullYear()}, ${hm}`;
+  };
+
+  // Send arrow for chat submit buttons (the Lichess-style triangle).
+  U.sendIcon = function () {
+    return '<svg class="send-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+  };
+
+  // Stroke icons for the direct-message header buttons.
+  U.iconSwords = function () {
+    return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="14.5 17.5 3 6 3 3 6 3 17.5 14.5"/><line x1="13" x2="19" y1="19" y2="13"/><line x1="16" x2="20" y1="16" y2="20"/><line x1="19" x2="21" y1="21" y2="19"/><polyline points="14.5 6.5 18 3 21 3 21 6 17.5 10"/><line x1="5" x2="9" y1="14" y2="18"/><line x1="7" x2="4" y1="17" y2="20"/><line x1="3" x2="5" y1="19" y2="21"/></svg>';
+  };
+  U.iconBan = function () {
+    return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>';
+  };
+
   U.toast = function (msg, kind) {
     const box = U.qs("#toasts");
     const t = U.el(`<div class="toast ${kind || ""}">${U.esc(msg)}</div>`);
