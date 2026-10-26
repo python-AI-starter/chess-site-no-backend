@@ -22,6 +22,11 @@
      rewrites --board-max inline, so all layouts follow at once */
   --board-max: 490px;
   --board-w: min(92vw, var(--board-max));
+  /* resize handle circle colors (Lichess defaults): hover is 50% alpha
+     of the Lichess accent orange, dragging is 50% alpha of the Lichess
+     secondary green */
+  --c-accent-cloud: rgba(214, 79, 0, .5);
+  --c-secondary-cloud: rgba(98, 153, 36, .5);
   --radius: 8px;
   --shadow: 0 2px 10px rgba(0,0,0,.07);
 }
@@ -188,8 +193,11 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
 .modal h3 { margin-top: 0; }
 .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
 
-/* Board */
-.board-wrap { position: relative; }
+/* Board wrapper hugs the board exactly (fit-content on standalone wraps;
+   in .an-board-row the flex:1 below keeps the wrap filling the row with
+   the board at width:100%), so the resize handle anchored to the wrapper
+   lands precisely on the board's bottom-right corner */
+.board-wrap { position: relative; width: fit-content; }
 .board {
   position: relative;   /* containing block for the arrow SVG and promotion picker */
   display: grid;
@@ -213,20 +221,52 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
   position: absolute; inset: 0; width: 100%; height: 100%;
   pointer-events: none; z-index: 3;
 }
-/* corner resize grip on the bottom-right square (h1 with white
-   orientation, a8 with black): two short black diagonal stripes, an
-   orange ring plus a nesw cursor on hover, drag to resize the board */
-.board-resize {
-  position: absolute; right: 0; bottom: 0; width: 7.5%; height: 7.5%;
-  z-index: 6; cursor: nesw-resize; touch-action: none;
-  user-select: none; -webkit-user-select: none;
+/* Corner resize handle (Lichess style): a 22px square overlapping the
+   board's bottom-right corner by 13px and extending 9px past it, with
+   two short black diagonal stripes inside and a nwse-resize cursor.
+   Hovering lights a translucent circle, dragging keeps it lit; the
+   handle is hidden on narrow viewports like on Lichess. The circle
+   colors are Lichess defaults: 50% alpha of the accent orange on hover,
+   50% alpha of the secondary green while dragging. */
+.board-resize { display: none; }
+body.resizing { -webkit-user-select: none; user-select: none; }
+@media (min-width: 799.3px) {
+  .board-resize {
+    cursor: nwse-resize;
+    z-index: 10;
+    width: 22px;
+    height: 22px;
+    display: block;
+    position: absolute;
+    bottom: -9px;
+    right: -9px;
+    touch-action: none;
+  }
+  .board-resize:before,
+  .board-resize:after {
+    content: "";
+    background: #000;
+    width: 12px;
+    height: 1px;
+    position: absolute;
+    left: 0;
+  }
+  .board-resize:before {
+    width: 5px;
+    transform: translate(7px, 8px) rotate(-45deg);
+  }
+  .board-resize:after {
+    transform: translate(1px, 6px) rotate(-45deg);
+  }
+  .board-resize:hover {
+    background: var(--c-accent-cloud);
+    border-radius: 50%;
+  }
+  .resizing .board-resize {
+    background: var(--c-secondary-cloud);
+    border-radius: 50%;
+  }
 }
-.board-resize svg { width: 100%; height: 100%; display: block; }
-.board-resize .bz-ring { opacity: 0; transition: opacity .12s ease; }
-.board-resize:hover .bz-ring, .board-resize.drag .bz-ring { opacity: 1; }
-.board-resize line { stroke: #1d1d1b; stroke-linecap: round; }
-.board-resize .bz-long { stroke-width: 3; opacity: .82; }
-.board-resize .bz-tip { stroke-width: 3; opacity: .82; }
 .sq { position: relative; touch-action: none; }
 .sq.light { background: var(--board-light); }
 .sq.dark { background: var(--board-dark); }

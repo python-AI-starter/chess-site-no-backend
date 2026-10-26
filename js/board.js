@@ -16,9 +16,11 @@
 // Touch devices: touch-action:none plus pointercancel handling keep
 // drag-and-drop working without page scrolling.
 // Board size: every board shares one width (--board-max CSS variable,
-// localStorage-backed). Boards that pass opts.resizable carry a grip in
-// the bottom-right square corner (h1/a8): hovering shows an orange ring
-// and a nesw cursor, dragging resizes the board site-wide.
+// localStorage-backed). Resizable boards (game, analysis, editor) carry
+// a Lichess-style resize handle overlapping the bottom-right board
+// corner: a nwse-resize cursor, two short black diagonal stripes, a
+// translucent circle on hover and while dragging; hidden on narrow
+// viewports (<799.3px) like on Lichess.
 (function () {
   "use strict";
 
@@ -47,49 +49,39 @@
   }
   applyBoardSize(readBoardSize(), false);
 
-  // Corner grip markup: an orange ring (visible on hover and while
-  // dragging) plus two black diagonal stripes along the nesw axis — the
-  // long one toward the square center (the rook side), the short one in
-  // the very corner, about twice as small.
-  function gripSvg() {
-    return '<svg viewBox="0 0 40 40" aria-hidden="true">' +
-      '<circle class="bz-ring" cx="20" cy="20" r="17.5" fill="none" stroke="#ef8a1f" stroke-width="2.6"/>' +
-      '<line class="bz-long" x1="7" y1="29" x2="23" y2="13"/>' +
-      '<line class="bz-tip" x1="30" y1="37" x2="37" y2="30"/>' +
-      '</svg>';
-  }
-
-  // Attach the grip to any board root element. Dragging it resizes the
-  // shared board size live (the dominant pointer axis wins) and persists
-  // the final value to localStorage on release.
+  // Attach the handle to a board root element. It is appended to the
+  // board's wrapper instead of the board itself, so the 9px that extend
+  // past the corner are not clipped by the board's overflow:hidden; the
+  // wrapper hugs the board (see .board-wrap in style.css). Dragging it
+  // resizes the shared board size live — both drag axes add up, like on
+  // Lichess — and persists the final value to localStorage on release.
   function attachResizeGrip(rootEl) {
-    if (!rootEl || rootEl.querySelector(":scope > .board-resize")) return;
+    const host = rootEl && (rootEl.parentElement || rootEl);
+    if (!host || host.querySelector(":scope > .board-resize")) return;
     const h = document.createElement("div");
     h.className = "board-resize";
-    h.innerHTML = gripSvg();
     h.addEventListener("pointerdown", (ev) => {
       if (ev.button !== 0) return;        // right/middle buttons stay with the board
       ev.preventDefault();
       ev.stopPropagation();
       const startX = ev.clientX, startY = ev.clientY, start = readBoardSize();
-      h.classList.add("drag");
+      document.body.classList.add("resizing");
       let last = start;
-      const dominant = (a, b) => (Math.abs(a) >= Math.abs(b) ? a : b);
       const onMove = (e) => {
-        last = applyBoardSize(start + dominant(e.clientX - startX, e.clientY - startY), false);
+        last = applyBoardSize(start + (e.clientX - startX + e.clientY - startY) / 2, false);
       };
       const finish = () => {
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", finish);
         document.removeEventListener("pointercancel", finish);
-        h.classList.remove("drag");
+        document.body.classList.remove("resizing");
         applyBoardSize(last, true);       // persist the final size only
       };
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", finish);
       document.addEventListener("pointercancel", finish);
     });
-    rootEl.appendChild(h);
+    host.appendChild(h);
   }
 
   window.BoardSize = { get: readBoardSize, set: applyBoardSize, attachGrip: attachResizeGrip };

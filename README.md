@@ -94,13 +94,14 @@ fixed at 1.
   both players have made one move (exclusive); after that the game
   ends only through its normal outcomes.
 - Shared board size: every board on the site (game, analysis, editor,
-  replays) uses one width, 490px by default. The bottom-right square
-  corner (h1 with white orientation, a8 with black) carries a grip of
-  two short black diagonal stripes; hovering it shows an orange ring
-  and a nesw resize cursor, dragging it resizes the board live while
-  the surrounding layout follows, and the chosen size persists in the
-  browser (localStorage) and applies to every board, with the editor
-  trays scaling together with the board.
+  replays) uses one width, 490px by default. A Lichess-style resize
+  handle overlaps the bottom-right board corner (two short black
+  diagonal stripes, a nwse-resize cursor and a translucent circle on
+  hover and while dragging; hidden on viewports narrower than 799.3px).
+  Dragging it resizes the board live — both drag axes add up, as on
+  Lichess — while the surrounding layout follows, and the chosen size
+  persists in the browser (localStorage) and applies to every board,
+  with the editor trays scaling together with the board.
 - Premoves, Lichess style: while the opponent is thinking, stage a move
   by click or drag (including promotion) to any square with no local
   legality checks. Once the opponent moves, the staged move is
