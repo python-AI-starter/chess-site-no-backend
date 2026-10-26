@@ -59,8 +59,9 @@ make that work on a static host with no server code:
   app base by probing for the service worker file and hands the route
   over to the entry point through sessionStorage.
 
-Old #/... bookmarks and stored #/game/... message links are normalized
-to the clean path on load.
+Old #/... bookmarks are normalized to the clean path on load, and
+stored challenge messages linkify both the clean game/<id> form and
+the legacy #/game/<id> form.
 
 ### Engine multithreading without server code
 
@@ -92,6 +93,14 @@ fixed at 1.
   Either player may abort a fresh game with no rating change until
   both players have made one move (exclusive); after that the game
   ends only through its normal outcomes.
+- Shared board size: every board on the site (game, analysis, editor,
+  replays) uses one width, 490px by default. The bottom-right square
+  corner (h1 with white orientation, a8 with black) carries a grip of
+  two short black diagonal stripes; hovering it shows an orange ring
+  and a nesw resize cursor, dragging it resizes the board live while
+  the surrounding layout follows, and the chosen size persists in the
+  browser (localStorage) and applies to every board, with the editor
+  trays scaling together with the board.
 - Premoves, Lichess style: while the opponent is thinking, stage a move
   by click or drag (including promotion) to any square with no local
   legality checks. Once the opponent moves, the staged move is
@@ -148,8 +157,11 @@ fixed at 1.
   protected: the creator cannot be muted, banned, deleted, or demoted,
   and only the creator manages admins.
 - Global chat on the home page (guests read, signing in to write,
-  Realtime, rate limited) and direct messages: a dialog list with an
-  unread badge, live conversations rendered as Lichess-style bubbles
+  Realtime, rate limited) and direct messages: the navbar shows a red
+  unread badge next to Messages on every page (live-updated through
+  Realtime, the same counter the dialog list shows per conversation),
+  a dialog list with per-conversation unread badges, live
+  conversations rendered as Lichess-style bubbles
   (own messages in green on the right, the partner's in orange on the
   left, no sender line), the full date and time on every message
   instead of date separator blocks (a textual month name keeps the

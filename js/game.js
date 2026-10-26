@@ -264,7 +264,8 @@
                      ((S.stm === "w") === (S.myColor === "white")),
       canPremove: () => S.g && S.g.status === "active" && S.myColor && !S.pendingMove &&
                         !((S.stm === "w") === (S.myColor === "white")),
-      myColor: () => S.myColor
+      myColor: () => S.myColor,
+      resizable: true
     });
 
     U.qs("#flip", root).addEventListener("click", () => {

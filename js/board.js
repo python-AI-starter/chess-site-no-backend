@@ -15,10 +15,84 @@
 // with each worse line, up to five arrows total.
 // Touch devices: touch-action:none plus pointercancel handling keep
 // drag-and-drop working without page scrolling.
+// Board size: every board shares one width (--board-max CSS variable,
+// localStorage-backed). Boards that pass opts.resizable carry a grip in
+// the bottom-right square corner (h1/a8): hovering shows an orange ring
+// and a nesw cursor, dragging resizes the board site-wide.
 (function () {
   "use strict";
 
   const FILES = "abcdefgh";
+
+  // Shared board size: one width in px for every board on the site (game,
+  // analysis, editor, replays). Kept in localStorage, applied through the
+  // --board-max CSS variable, so boards, trays and the surrounding grid
+  // layouts all follow at once. The default is 12.5% below the old fixed
+  // 560px so the game and editor boards fit a laptop screen at 100% zoom.
+  const SIZE_KEY = "ladya-board-size";
+  const SIZE_MIN = 320, SIZE_MAX = 720, SIZE_DEFAULT = 490;
+
+  function readBoardSize() {
+    try {
+      const n = Number(localStorage.getItem(SIZE_KEY));
+      if (n >= SIZE_MIN && n <= SIZE_MAX) return Math.round(n);
+    } catch (e) {}
+    return SIZE_DEFAULT;
+  }
+  function applyBoardSize(px, save) {
+    px = Math.max(SIZE_MIN, Math.min(SIZE_MAX, Math.round(px)));
+    document.documentElement.style.setProperty("--board-max", px + "px");
+    if (save) { try { localStorage.setItem(SIZE_KEY, String(px)); } catch (e) {} }
+    return px;
+  }
+  applyBoardSize(readBoardSize(), false);
+
+  // Corner grip markup: an orange ring (visible on hover and while
+  // dragging) plus two black diagonal stripes along the nesw axis — the
+  // long one toward the square center (the rook side), the short one in
+  // the very corner, about twice as small.
+  function gripSvg() {
+    return '<svg viewBox="0 0 40 40" aria-hidden="true">' +
+      '<circle class="bz-ring" cx="20" cy="20" r="17.5" fill="none" stroke="#ef8a1f" stroke-width="2.6"/>' +
+      '<line class="bz-long" x1="7" y1="29" x2="23" y2="13"/>' +
+      '<line class="bz-tip" x1="30" y1="37" x2="37" y2="30"/>' +
+      '</svg>';
+  }
+
+  // Attach the grip to any board root element. Dragging it resizes the
+  // shared board size live (the dominant pointer axis wins) and persists
+  // the final value to localStorage on release.
+  function attachResizeGrip(rootEl) {
+    if (!rootEl || rootEl.querySelector(":scope > .board-resize")) return;
+    const h = document.createElement("div");
+    h.className = "board-resize";
+    h.innerHTML = gripSvg();
+    h.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;        // right/middle buttons stay with the board
+      ev.preventDefault();
+      ev.stopPropagation();
+      const startX = ev.clientX, startY = ev.clientY, start = readBoardSize();
+      h.classList.add("drag");
+      let last = start;
+      const dominant = (a, b) => (Math.abs(a) >= Math.abs(b) ? a : b);
+      const onMove = (e) => {
+        last = applyBoardSize(start + dominant(e.clientX - startX, e.clientY - startY), false);
+      };
+      const finish = () => {
+        document.removeEventListener("pointermove", onMove);
+        document.removeEventListener("pointerup", finish);
+        document.removeEventListener("pointercancel", finish);
+        h.classList.remove("drag");
+        applyBoardSize(last, true);       // persist the final size only
+      };
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", finish);
+      document.addEventListener("pointercancel", finish);
+    });
+    rootEl.appendChild(h);
+  }
+
+  window.BoardSize = { get: readBoardSize, set: applyBoardSize, attachGrip: attachResizeGrip };
 
   // mark colors (Lichess palette). A value is either a plain color or
   // {fill, opacity} for marks that need their own transparency
@@ -118,6 +192,8 @@
       this._arrowSvg.setAttribute("viewBox", "0 0 8 8");
       this._arrowSvg.setAttribute("preserveAspectRatio", "none");
       this.root.appendChild(this._arrowSvg);
+      // corner resize grip on boards that allow it (game, analysis)
+      if (this.opts.resizable) window.BoardSize.attachGrip(this.root);
     }
 
     _sqAt(row, col) {

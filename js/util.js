@@ -144,12 +144,14 @@
     root.appendChild(m);
   };
 
-  // Escape text and turn links into anchors, including #/... routes.
+  // Escape text and turn links into anchors: internal game routes
+  // (clean or legacy #/ form) and external http(s) links.
   U.linkify = function (text) {
     const s = U.esc(text);
-    // internal #/game/<uuid> routes first
-    let out = s.replace(/(^|\s)(#\/[a-z]+\/[0-9a-f-]{10,})/gi,
-      (m, sp, url) => `${sp}<a href="${url}">${url}</a>`);
+    // internal game routes first, both legacy "#/game/<uuid>" and the
+    // clean "game/<uuid>" stored by challenge messages
+    let out = s.replace(/(^|\s)((#\/)?game\/[0-9a-f-]{10,})/gi,
+      (m, sp, url) => `${sp}<a href="${url.startsWith("#/") ? url : "#/" + url}">${url}</a>`);
     // then external http(s) links
     out = out.replace(/(https?:\/\/[^^\s<>&"']+)/g,
       (m, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`);

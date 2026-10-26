@@ -176,7 +176,7 @@
   "challenge.rated": "计等级分",
   "challenge.casual": "友谊赛",
   "challenge.send": "发起挑战",
-  "challenge.dm": "⚔ 我向你发起一场 {tc} 对局（{kind}）。接受：#/game/{id}",
+  "challenge.dm": "⚔ 我向你发起一场 {tc} 对局（{kind}）。接受：game/{id}",
   "challenge.sent": "挑战已发送 — 对方将收到一条私信",
   "profile.notFound": "未找到该棋手",
   "profile.bannedBadge": "已封禁",

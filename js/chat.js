@@ -418,6 +418,7 @@
     (msgs || []).forEach(addMsg);
     if (!msgs || !msgs.length) log.innerHTML = `<div class="empty">${U.esc(t("dm.startChat"))}</div>`;
     await API.markDmsRead(p.id);
+    if (App.refreshDmBadge) App.refreshDmBadge();   // drop the navbar count at once
 
     // Enter sends, Shift+Enter adds a line; the box grows with the text
     const ta = U.qs("#dm-text");
@@ -471,7 +472,7 @@
         addMsg(m);
         if (m.sender_id === p.id) gotNew = true;
       }
-      if (gotNew) { U.soundMove(); await API.markDmsRead(p.id); }
+      if (gotNew) { U.soundMove(); await API.markDmsRead(p.id); if (App.refreshDmBadge) App.refreshDmBadge(); }
     }
 
     let _wasDown = false;
@@ -484,6 +485,7 @@
       if (row.sender_id === p.id) {
         U.soundMove();
         await API.markDmsRead(p.id);
+        if (App.refreshDmBadge) App.refreshDmBadge();
       }
     }, (status) => {
       if (status === "SUBSCRIBED" && _wasDown) fetchFresh();

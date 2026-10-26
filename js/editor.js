@@ -148,6 +148,9 @@
           boardEl.appendChild(d);
         }
       }
+      // the editor board shares the site-wide board size: same corner
+      // grip, and the trays (piece slots) follow the board width
+      window.BoardSize.attachGrip(boardEl);
     }
     function pieceSpan(p, cls) {
       const s = document.createElement("span");

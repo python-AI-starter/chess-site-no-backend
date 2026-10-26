@@ -175,6 +175,7 @@
       API.invalidateBlocked();
       this.refreshNav().then(() => {
         startHeartbeat();
+        syncDmLive();      // rebuild the badge channel for the new user
         this.refreshDmBadge();
         this.route(); // a real sign-in/out requires a rerender
       });
@@ -265,6 +266,22 @@
     hbTimer = setInterval(beat, 30000);
   }
 
+  // Live DM badge: one Realtime channel per signed-in user, filtered to
+  // own incoming messages. A new direct message refreshes the navbar
+  // count instantly, the same way the unread counters update inside the
+  // dialog list; the channel is rebuilt on sign-in/out.
+  let dmChan = null;
+  function syncDmLive() {
+    const uid = App.user ? App.user.id : null;
+    if (dmChan && dmChan._uid === uid) return;
+    if (dmChan) { API.unsubscribe(dmChan); dmChan = null; }
+    if (!uid) return;
+    dmChan = API.subscribeInserts("dm_messages", "recipient_id=eq." + uid,
+      () => { App.refreshDmBadge(); });
+    dmChan._uid = uid;
+  }
+  App.syncDmLive = syncDmLive;
+
   (async function init() {
     // language first: the dictionaries and the static shell localize
     // before the first render
@@ -301,8 +318,10 @@
       U.toast(I18n.t("auth.emailConfirmed"), "good");
       try { history.replaceState({}, "", location.pathname + location.search); } catch (e) {}
     }
-    // unread DM badge refreshes periodically and idles in the background
+    // unread DM badge refreshes periodically, idles in the background and
+    // updates instantly through the Realtime channel
     App.refreshDmBadge();
+    syncDmLive();
     API.poll(15000, () => App.refreshDmBadge());
     // quiet badge refresh when returning to the tab
     API.onVisible(() => App.refreshDmBadge());

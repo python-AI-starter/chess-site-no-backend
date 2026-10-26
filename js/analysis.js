@@ -691,7 +691,8 @@
       onMove: (from, to, promo) => playMove(from, to, promo),
       canMove: () => true,
       canPremove: () => false,
-      myColor: () => (stmAt(S.cur) === "w" ? "white" : "black")
+      myColor: () => (stmAt(S.cur) === "w" ? "white" : "black"),
+      resizable: true
     });
 
     const fenInput = U.qs("#ab-fen", root);

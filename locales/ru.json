@@ -176,7 +176,7 @@
   "challenge.rated": "Рейтинговая",
   "challenge.casual": "Товарищеская",
   "challenge.send": "Вызвать",
-  "challenge.dm": "⚔ Вызываю вас на партию {tc} ({kind}). Принять: #/game/{id}",
+  "challenge.dm": "⚔ Вызываю вас на партию {tc} ({kind}). Принять: game/{id}",
   "challenge.sent": "Вызов отправлен — игрок получит личное сообщение",
   "profile.notFound": "Профиль не найден",
   "profile.bannedBadge": "заблокирован",

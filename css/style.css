@@ -18,6 +18,10 @@
   --board-dark: #739552;
   --hl: rgba(20, 85, 30, 0.5);
   --premove: rgba(180, 60, 40, 0.45);
+  /* one shared board size for every board on the site; the corner grip
+     rewrites --board-max inline, so all layouts follow at once */
+  --board-max: 490px;
+  --board-w: min(92vw, var(--board-max));
   --radius: 8px;
   --shadow: 0 2px 10px rgba(0,0,0,.07);
 }
@@ -191,7 +195,7 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
   display: grid;
   grid-template-columns: repeat(8, 1fr);
   grid-template-rows: repeat(8, 1fr);
-  width: min(92vw, 560px);
+  width: var(--board-w);
   aspect-ratio: 1;
   border-radius: 6px; overflow: hidden;
   box-shadow: 0 4px 18px rgba(0,0,0,.18);
@@ -209,6 +213,20 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
   position: absolute; inset: 0; width: 100%; height: 100%;
   pointer-events: none; z-index: 3;
 }
+/* corner resize grip on the bottom-right square (h1 with white
+   orientation, a8 with black): two short black diagonal stripes, an
+   orange ring plus a nesw cursor on hover, drag to resize the board */
+.board-resize {
+  position: absolute; right: 0; bottom: 0; width: 7.5%; height: 7.5%;
+  z-index: 6; cursor: nesw-resize; touch-action: none;
+  user-select: none; -webkit-user-select: none;
+}
+.board-resize svg { width: 100%; height: 100%; display: block; }
+.board-resize .bz-ring { opacity: 0; transition: opacity .12s ease; }
+.board-resize:hover .bz-ring, .board-resize.drag .bz-ring { opacity: 1; }
+.board-resize line { stroke: #1d1d1b; stroke-linecap: round; }
+.board-resize .bz-long { stroke-width: 3; opacity: .82; }
+.board-resize .bz-tip { stroke-width: 3; opacity: .82; }
 .sq { position: relative; touch-action: none; }
 .sq.light { background: var(--board-light); }
 .sq.dark { background: var(--board-dark); }
@@ -243,7 +261,7 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
 }
 .hint.cap::before {
   content: ""; position: absolute; inset: 6%;
-  border: calc(min(92vw, 560px) / 8 / 14) solid rgba(20, 30, 15, .35);
+  border: calc(var(--board-w) / 8 / 14) solid rgba(20, 30, 15, .35);
   border-radius: 50%;
 }
 .promo-wrap {
@@ -258,7 +276,7 @@ label { display: block; font-weight: 600; margin: 10px 0 4px; font-size: 14px; }
 .promo-btn .piece { cursor: pointer; }
 
 /* Game panel */
-.game-layout { display: grid; grid-template-columns: minmax(280px, 560px) minmax(280px, 1fr); gap: 20px; align-items: start; }
+.game-layout { display: grid; grid-template-columns: minmax(280px, var(--board-max)) minmax(280px, 1fr); gap: 20px; align-items: start; }
 @media (max-width: 980px) { .game-layout { grid-template-columns: 1fr; } }
 .player-bar {
   display: flex; align-items: center; gap: 10px; padding: 6px 2px;
@@ -449,7 +467,7 @@ html.dark .dm-meta { color: #a3a099; }
 .chat-box.tall { height: 420px; }
 .replay-bar { display: flex; gap: 6px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
 .rp-slot { padding: 2px 0 14px; }
-.rp-slot .board { width: min(100%, 380px); }
+.rp-slot .board { width: min(100%, calc(var(--board-max) * 0.776)); }
 .rp-moves { max-height: 200px; margin-top: 10px; }
 .moves-list td[data-ply] { cursor: pointer; }
 .moves-list td[data-ply]:hover { background: #eef6fe; }
@@ -541,7 +559,7 @@ html.dark .eval-bar-v .ebv-white { background: #f2f0ec; }
    fields) and a side column (engine on top, moves in the middle, buttons
    at the bottom) */
 .an-layout {
-  display: grid; grid-template-columns: minmax(280px, 560px) minmax(280px, 1fr);
+  display: grid; grid-template-columns: minmax(280px, var(--board-max)) minmax(280px, 1fr);
   gap: 18px; align-items: start;
 }
 @media (max-width: 980px) { .an-layout { grid-template-columns: 1fr; } }
@@ -572,7 +590,7 @@ html.dark .eval-bar-v .ebv-white { background: #f2f0ec; }
 .an-copy { flex: 0 0 auto; }
 
 /* the same layout inside a leaderboard replay row (narrower board) */
-.rp-an { grid-template-columns: minmax(240px, 380px) minmax(260px, 1fr); }
+.rp-an { grid-template-columns: minmax(240px, calc(var(--board-max) * 0.776)) minmax(260px, 1fr); }
 .rp-an .an-moves { max-height: 180px; min-height: 80px; }
 .rp-an .engine-lines { max-height: 150px; overflow-y: auto; }
 @media (max-width: 980px) { .rp-an { grid-template-columns: 1fr; } }
@@ -629,7 +647,7 @@ html.dark a.mv.cur { background: #2c4257; color: #e8e6e0; }
    left edge follows the board, which is not centered in its column */
 .ed-tray { display: flex; justify-content: flex-start; margin: 0; }
 .ed-tray-row {
-  display: flex; gap: 0; width: min(92vw, 560px);
+  display: flex; gap: 0; width: var(--board-w);
   overflow: hidden; background: var(--panel2);
 }
 #ed-tray-top .ed-tray-row { border-radius: 6px 6px 0 0; }

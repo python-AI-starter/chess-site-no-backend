@@ -176,7 +176,7 @@
   "challenge.rated": "Rated",
   "challenge.casual": "Casual",
   "challenge.send": "Challenge",
-  "challenge.dm": "⚔ I challenge you to a {tc} game ({kind}). Accept: #/game/{id}",
+  "challenge.dm": "⚔ I challenge you to a {tc} game ({kind}). Accept: game/{id}",
   "challenge.sent": "Challenge sent — the player will get a direct message",
   "profile.notFound": "Profile not found",
   "profile.bannedBadge": "banned",
