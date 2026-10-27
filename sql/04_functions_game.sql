@@ -66,7 +66,7 @@ begin
     end if;
 
     -- FEN is parsed exactly once per move
-    v_board := chess_parse_fen(g.fen);
+    v_board := public.chess_parse_fen(g.fen);
     if v_board.white_to_move <> v_is_white then
         raise exception 'Сейчас не ваш ход';
     end if;
@@ -475,14 +475,14 @@ begin
     -- and moves are then applied over the board
     -- (chess_validate_move_b + chess_make_move), with no per-half-move
     -- parse or to_fen.
-    v_b := chess_parse_fen(g.start_fen);
+    v_b := public.chess_parse_fen(g.start_fen);
     for v_m in select * from jsonb_array_elements(v_moves) loop
-        if not chess_validate_move_b(v_b, v_m ->> 'u') then
+        if not public.chess_validate_move_b(v_b, v_m ->> 'u') then
             raise exception 'Партия повреждена: ход % нелегален', v_m ->> 'u';
         end if;
-        v_b := chess_make_move(v_b,
-                 chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
-                 chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
+        v_b := public.chess_make_move(v_b,
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
                  nullif(substr(v_m ->> 'u', 5, 1), ''));
     end loop;
 
@@ -497,7 +497,7 @@ begin
     end if;
 
     update games set
-        fen              = chess_to_fen(v_b),
+        fen              = public.chess_to_fen(v_b),
         moves            = v_moves,
         position_history = v_hist,
         white_ms         = v_white_ms,

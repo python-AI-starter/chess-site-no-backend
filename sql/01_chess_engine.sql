@@ -1,6 +1,7 @@
 -- Chess engine for PostgreSQL 17: a chess.js 1.4.0 equivalent in pure
--- PL/pgSQL. Bitboards on bigint with LSB/MSB bit math instead of string
--- operations; semantics fully aligned with chess.js.
+-- PL/pgSQL. Bitboards on bigint with LSB bit math and shift-based attack
+-- maps instead of string operations; semantics aligned with chess.js
+-- (including FEN validation quirks verified against validateFen 1.4.0).
 
 -- Positions are bitboards on bigint (64-bit). Square numbering: 0..63,
 -- a1=0, b1=1, ..., h1=7, a2=8, ..., h8=63.
@@ -21,10 +22,15 @@
 
 -- 1. Data types
 
-
-DROP TYPE IF EXISTS chess_move_result CASCADE;
-DROP TYPE IF EXISTS chess_analysis CASCADE;
-DROP TYPE IF EXISTS chess_board CASCADE;
+-- NOTE: no CASCADE here on purpose. DROP ... CASCADE would silently destroy
+-- every table/column/function depending on these types when the script is
+-- re-run on a live database (games.chess_board columns, wrappers from
+-- 03/04/09 and so on). PostgreSQL itself raises a precise error listing the
+-- dependents; drop or migrate them explicitly, then re-run. To evolve a
+-- type in place use ALTER TYPE ... ADD/DROP/ALTER ATTRIBUTE instead.
+DROP TYPE IF EXISTS chess_move_result;
+DROP TYPE IF EXISTS chess_analysis;
+DROP TYPE IF EXISTS chess_board;
 
 CREATE TYPE chess_board AS (
     wp          bigint,   -- white pawns
@@ -131,6 +137,7 @@ DECLARE
     v_sq      int;
     v_bit     bigint;
     v_ntok    int;
+    v_prev_digit boolean;
 BEGIN
     v_fields := trim(regexp_replace(p_fen, '\s+', ' ', 'g'));
     -- pad short FENs like chess.js load(): missing trailing fields
@@ -149,21 +156,29 @@ BEGIN
     IF v_pos = '' THEN
         RAISE EXCEPTION 'FEN: пустое описание позиции';
     END IF;
-    IF split_part(v_pos, '/', 9) <> '' THEN
-        RAISE EXCEPTION 'FEN: больше 8 рядов';
+    -- exactly 8 '/'-separated rank parts, as chess.js validateFen criterion 7
+    -- (tokens[0].split('/').length !== 8): a trailing slash yields a 9th
+    -- empty element and must be rejected, 'a//b' style empty rows are caught
+    -- by the per-row loop below.
+    IF array_length(string_to_array(v_pos, '/'), 1) <> 8 THEN
+        RAISE EXCEPTION 'FEN: позиция должна содержать ровно 8 рядов';
     END IF;
 
     -- piece placement
     FOR v_r IN 1..8 LOOP
         v_row := split_part(v_pos, '/', v_r);
-        IF v_row = '' THEN
-            RAISE EXCEPTION 'FEN: меньше 8 рядов';
-        END IF;
         v_f := 0;
+        v_prev_digit := false;
         FOR v_i IN 1..length(v_row) LOOP
             v_c := substr(v_row, v_i, 1);
             IF v_c BETWEEN '1' AND '8' THEN
+                -- chess.js criterion 8 rejects two digits in a row (a FEN
+                -- like 44 sums to 8 and is easy to accept by accident)
+                IF v_prev_digit THEN
+                    RAISE EXCEPTION 'FEN: две цифры подряд в ряду %', v_r;
+                END IF;
                 v_f := v_f + v_c::int;
+                v_prev_digit := true;
             ELSE
                 IF v_f > 7 THEN
                     RAISE EXCEPTION 'FEN: переполнение ряда %', v_r;
@@ -186,6 +201,7 @@ BEGIN
                     ELSE RAISE EXCEPTION 'FEN: недопустимый символ "%"', v_c;
                 END CASE;
                 v_f := v_f + 1;
+                v_prev_digit := false;
             END IF;
         END LOOP;
         IF v_f <> 8 THEN
@@ -270,6 +286,7 @@ DECLARE
     v_r         int;
     v_empty     int;
     v_c         text;
+    v_bit       bigint;
     v_ep_out    text;
     v_from      int;
     v_from2     int;
@@ -278,18 +295,19 @@ BEGIN
         v_rank := ''; v_empty := 0;
         FOR v_f IN 0..7 LOOP
             v_c := NULL;
-            IF    (p_b.wp & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'P';
-            ELSIF (p_b.wn & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'N';
-            ELSIF (p_b.wb & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'B';
-            ELSIF (p_b.wr & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'R';
-            ELSIF (p_b.wq & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'Q';
-            ELSIF (p_b.wk & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'K';
-            ELSIF (p_b.bp & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'p';
-            ELSIF (p_b.bn & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'n';
-            ELSIF (p_b.bb & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'b';
-            ELSIF (p_b.br & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'r';
-            ELSIF (p_b.bq & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'q';
-            ELSIF (p_b.bk & (1::bigint << (v_r*8 + v_f))) <> 0 THEN v_c := 'k';
+            v_bit := 1::bigint << (v_r*8 + v_f);   -- one shift per square
+            IF    (p_b.wp & v_bit) <> 0 THEN v_c := 'P';
+            ELSIF (p_b.wn & v_bit) <> 0 THEN v_c := 'N';
+            ELSIF (p_b.wb & v_bit) <> 0 THEN v_c := 'B';
+            ELSIF (p_b.wr & v_bit) <> 0 THEN v_c := 'R';
+            ELSIF (p_b.wq & v_bit) <> 0 THEN v_c := 'Q';
+            ELSIF (p_b.wk & v_bit) <> 0 THEN v_c := 'K';
+            ELSIF (p_b.bp & v_bit) <> 0 THEN v_c := 'p';
+            ELSIF (p_b.bn & v_bit) <> 0 THEN v_c := 'n';
+            ELSIF (p_b.bb & v_bit) <> 0 THEN v_c := 'b';
+            ELSIF (p_b.br & v_bit) <> 0 THEN v_c := 'r';
+            ELSIF (p_b.bq & v_bit) <> 0 THEN v_c := 'q';
+            ELSIF (p_b.bk & v_bit) <> 0 THEN v_c := 'k';
             END IF;
             IF v_c IS NULL THEN
                 v_empty := v_empty + 1;
@@ -523,9 +541,14 @@ BEGIN
     END IF;
 
     v_cap    := (v_occ & v_tb) <> 0;
+    -- ep: a diagonal step ONTO the ep square in the FORWARD direction only.
+    -- The direction test is mandatory: p_b.ep is attacker-controlled data
+    -- (a malformed FEN may point anywhere), and abs(rank diff) = 1 alone
+    -- would let a white pawn "capture" backwards (e.g. pawn d7 taking e6).
     v_ep     := v_piece = 1 AND p_b.ep >= 0 AND p_to = p_b.ep
                 AND ((p_from & 7) <> (p_to & 7))
-                AND abs((p_to >> 3) - (p_from >> 3)) = 1;
+                AND ((p_to >> 3) - (p_from >> 3))
+                    = (CASE WHEN v_white THEN 1 ELSE -1 END);
     v_promo  := v_piece = 1 AND ((p_to >> 3) IN (0, 7));
     v_castle := v_piece = 6 AND (p_to = p_from + 2 OR p_to = p_from - 2)
                 AND ((p_to >> 3) = (p_from >> 3));
@@ -601,21 +624,28 @@ BEGIN
             WHEN p_from + 2 THEN v_rsrc := p_to + 1; v_rdst := p_to - 1;  -- 0-0
             ELSE                 v_rsrc := p_to - 2; v_rdst := p_to + 1;  -- 0-0-0
         END CASE;
-        v_rbit := 1::bigint << v_rsrc;
-        IF (v_occ & v_rbit) <> 0 THEN
-            -- move any piece from v_rsrc to v_rdst
-            IF    (v.wp & v_rbit) <> 0 THEN v.wp := (v.wp & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.wn & v_rbit) <> 0 THEN v.wn := (v.wn & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.wb & v_rbit) <> 0 THEN v.wb := (v.wb & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.wr & v_rbit) <> 0 THEN v.wr := (v.wr & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.wq & v_rbit) <> 0 THEN v.wq := (v.wq & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.wk & v_rbit) <> 0 THEN v.wk := (v.wk & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.bp & v_rbit) <> 0 THEN v.bp := (v.bp & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.bn & v_rbit) <> 0 THEN v.bn := (v.bn & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.bb & v_rbit) <> 0 THEN v.bb := (v.bb & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.br & v_rbit) <> 0 THEN v.br := (v.br & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.bq & v_rbit) <> 0 THEN v.bq := (v.bq & ~v_rbit) | (1::bigint << v_rdst);
-            ELSIF (v.bk & v_rbit) <> 0 THEN v.bk := (v.bk & ~v_rbit) | (1::bigint << v_rdst);
+        -- chess.js computes castlingFrom = to - 2 relative to the CURRENT
+        -- king square and happily reads board[-2] (a no-op) for a garbage
+        -- king left of e1. A bigint shift cannot reproduce that: we must
+        -- skip the rook move when v_rsrc falls off the board, otherwise
+        -- 1::bigint << -2 lands on a random square of the real board.
+        IF v_rsrc BETWEEN 0 AND 63 THEN
+            v_rbit := 1::bigint << v_rsrc;
+            IF (v_occ & v_rbit) <> 0 THEN
+                -- move any piece from v_rsrc to v_rdst
+                IF    (v.wp & v_rbit) <> 0 THEN v.wp := (v.wp & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.wn & v_rbit) <> 0 THEN v.wn := (v.wn & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.wb & v_rbit) <> 0 THEN v.wb := (v.wb & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.wr & v_rbit) <> 0 THEN v.wr := (v.wr & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.wq & v_rbit) <> 0 THEN v.wq := (v.wq & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.wk & v_rbit) <> 0 THEN v.wk := (v.wk & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.bp & v_rbit) <> 0 THEN v.bp := (v.bp & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.bn & v_rbit) <> 0 THEN v.bn := (v.bn & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.bb & v_rbit) <> 0 THEN v.bb := (v.bb & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.br & v_rbit) <> 0 THEN v.br := (v.br & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.bq & v_rbit) <> 0 THEN v.bq := (v.bq & ~v_rbit) | (1::bigint << v_rdst);
+                ELSIF (v.bk & v_rbit) <> 0 THEN v.bk := (v.bk & ~v_rbit) | (1::bigint << v_rdst);
+                END IF;
             END IF;
         END IF;
     END IF;
@@ -725,10 +755,13 @@ BEGIN
         v_rook := p_b.wr; v_queen := p_b.wq; v_king := p_b.wk;
     END IF;
 
+    -- ep: same forward-direction rule as in chess_make_move; without it a
+    -- malformed FEN lets a pawn "capture" the ep square behind it.
     v_is_ep := NOT v_is_king AND v_is_pawn
                AND p_b.ep >= 0 AND p_to = p_b.ep
                AND ((p_from & 7) <> (p_to & 7))
-               AND abs((p_to >> 3) - (p_from >> 3)) = 1;
+               AND ((p_to >> 3) - (p_from >> 3))
+                   = (CASE WHEN v_white THEN 1 ELSE -1 END);
 
     IF NOT v_is_king THEN
         -- the captured piece must vanish from the enemy bitboards,
@@ -1668,7 +1701,8 @@ BEGIN
         -- accepts the move (clearing an empty square is a no-op, and
         -- make_move / move_safe handle it correctly).
         v_is_ep := v_b.ep >= 0 AND v_to = v_b.ep AND ((v_from & 7) <> (v_to & 7))
-                   AND abs((v_to >> 3) - (v_from >> 3)) = 1
+                   AND ((v_to >> 3) - (v_from >> 3))
+                       = (CASE WHEN v_white THEN 1 ELSE -1 END)
                    AND (v_enemy & v_tb) = 0;
         IF v_is_ep THEN
             v_tg := v_tg | v_tb;
@@ -1865,7 +1899,7 @@ end $$;
 
 create or replace function chess_san_b(p_b chess_board, p_uci text,
                                        p_is_check boolean, p_is_mate boolean)
-returns text language plpgsql immutable as $$
+returns text language plpgsql immutable parallel safe as $$
 declare
     v_from      int;
     v_to        int;
@@ -1918,9 +1952,12 @@ begin
         return v_res || case when p_is_mate then '#' when p_is_check then '+' else '' end;
     end if;
 
-    -- capture (including en passant)
+    -- capture (including en passant): the ep flag follows the same
+    -- forward-direction rule as chess_make_move / chess_validate_move_b
     v_is_ep   := v_piece = 'p' and p_b.ep >= 0 and v_to = p_b.ep
-                 and ((v_from & 7) <> (v_to & 7));
+                 and ((v_from & 7) <> (v_to & 7))
+                 and ((v_to >> 3) - (v_from >> 3))
+                     = (case when p_b.white_to_move then 1 else -1 end);
     v_capture := ((v_occ & (1::bigint << v_to)) <> 0) or v_is_ep;
 
     -- disambiguation: only for n/b/r/q and only when more than one piece

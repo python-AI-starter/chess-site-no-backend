@@ -31,13 +31,13 @@ begin
     if p_uci !~ '^[a-h][1-8][a-h][1-8][qrbn]?$' then
         return p_uci;
     end if;
-    v_b := chess_parse_fen(p_fen);
-    v_res := chess_play_move_b(v_b, p_uci);
+    v_b := public.chess_parse_fen(p_fen);
+    v_res := public.chess_play_move_b(v_b, p_uci);
     if not v_res.is_legal then
         -- illegal move: base SAN without check suffixes
-        return chess_san_b(v_b, p_uci, false, false);
+        return public.chess_san_b(v_b, p_uci, false, false);
     end if;
-    return chess_san_b(v_b, p_uci, v_res.is_check, v_res.reason = 'checkmate');
+    return public.chess_san_b(v_b, p_uci, v_res.is_check, v_res.reason = 'checkmate');
 end $$;
 
 -- Game finalization (private)
@@ -278,7 +278,7 @@ begin
     where id = g.id returning * into g;
 
     return jsonb_build_object('ok', true, 'game', to_jsonb(g),
-                              'legal_moves', to_jsonb(chess_get_moves(g.fen)),
+                              'legal_moves', to_jsonb(public.chess_get_moves(g.fen)),
                               'server_now_ms', public.api_ms(clock_timestamp()));
 end $$;
 

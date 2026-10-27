@@ -55,7 +55,7 @@ begin
     end if;
 
     -- FEN is parsed exactly once per move
-    v_board := chess_parse_fen(g.fen);
+    v_board := public.chess_parse_fen(g.fen);
     if v_board.white_to_move <> v_is_white then
         raise exception 'Сейчас не ваш ход';
     end if;
@@ -333,14 +333,14 @@ begin
     -- and moves are then applied over the board
     -- (chess_validate_move_b + chess_make_move), with no per-half-move
     -- parse or to_fen.
-    v_b := chess_parse_fen(g.start_fen);
+    v_b := public.chess_parse_fen(g.start_fen);
     for v_m in select * from jsonb_array_elements(v_moves) loop
-        if not chess_validate_move_b(v_b, v_m ->> 'u') then
+        if not public.chess_validate_move_b(v_b, v_m ->> 'u') then
             raise exception 'Партия повреждена: ход % нелегален', v_m ->> 'u';
         end if;
-        v_b := chess_make_move(v_b,
-                 chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
-                 chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
+        v_b := public.chess_make_move(v_b,
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
                  nullif(substr(v_m ->> 'u', 5, 1), ''));
     end loop;
 
@@ -355,7 +355,7 @@ begin
     end if;
 
     update games set
-        fen              = chess_to_fen(v_b),
+        fen              = public.chess_to_fen(v_b),
         moves            = v_moves,
         position_history = v_hist,
         white_ms         = v_white_ms,
@@ -390,16 +390,16 @@ begin
     if not found then return jsonb_build_object('ok', false, 'error', 'Партия не найдена'); end if;
     -- the start FEN is parsed once; the position then travels over the
     -- board (validate + make_move) and serializes once per half-move
-    v_b := chess_parse_fen(g.start_fen);
+    v_b := public.chess_parse_fen(g.start_fen);
     for v_m in select * from jsonb_array_elements(g.moves) loop
-        if not chess_validate_move_b(v_b, v_m ->> 'u') then
+        if not public.chess_validate_move_b(v_b, v_m ->> 'u') then
             exit;
         end if;
-        v_b := chess_make_move(v_b,
-                 chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
-                 chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
+        v_b := public.chess_make_move(v_b,
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 1, 2)),
+                 public.chess_sq_from_name(substr(v_m ->> 'u', 3, 2)),
                  nullif(substr(v_m ->> 'u', 5, 1), ''));
-        v_fens := v_fens || chess_to_fen(v_b);
+        v_fens := v_fens || public.chess_to_fen(v_b);
     end loop;
     return jsonb_build_object(
         'ok', true,
@@ -563,7 +563,7 @@ end $$;
 
 revoke execute on function public.decline_takeback(uuid) from anon;
 
--- 10. chess_san(fen): one parse_fen plus one play_move_b
+-- 10. public.chess_san(fen): one parse_fen plus one play_move_b
 -- A thin wrapper over the board functions; illegal moves still yield
 -- the base SAN without check suffixes.
 create or replace function public.chess_san(p_fen text, p_uci text)
@@ -578,13 +578,13 @@ begin
     if p_uci !~ '^[a-h][1-8][a-h][1-8][qrbn]?$' then
         return p_uci;
     end if;
-    v_b := chess_parse_fen(p_fen);
-    v_res := chess_play_move_b(v_b, p_uci);
+    v_b := public.chess_parse_fen(p_fen);
+    v_res := public.chess_play_move_b(v_b, p_uci);
     if not v_res.is_legal then
         -- illegal move: base SAN without check suffixes
-        return chess_san_b(v_b, p_uci, false, false);
+        return public.chess_san_b(v_b, p_uci, false, false);
     end if;
-    return chess_san_b(v_b, p_uci, v_res.is_check, v_res.reason = 'checkmate');
+    return public.chess_san_b(v_b, p_uci, v_res.is_check, v_res.reason = 'checkmate');
 end $$;
 
 -- 11. _finish_game: one UPDATE on games instead of two
