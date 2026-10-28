@@ -108,6 +108,7 @@
   "game.cancelChallengeQ": "取消挑战？",
   "game.cancelChallengeText": "对局将被删除。",
   "game.loginToJoin": "登录后即可加入对局。",
+  "game.inviteOnlyHint": "此对局为定向邀请，只有被邀请的玩家可以接受。",
   "game.join": "♟ 加入对局",
   "game.aborted": "对局中止",
   "game.draw": "和棋",

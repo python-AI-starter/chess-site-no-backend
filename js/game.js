@@ -51,6 +51,7 @@
       premove: null,           // { from, to, promo } staged move (square names)
       flagRetryAt: null,       // retry delay for a flag claim after not_out
       chatSeen: new Set(), lastChatTs: null,
+      chatMsgs: [],            // confirmed chat messages in arrival order
       chatPending: [],         // optimistic messages: [{body, el}]
       rtUp: false,             // game channel websocket up: polling not needed
       stopVisible: null,
@@ -88,6 +89,7 @@
       S.legal = computeLegal(g);
       S.flagRetryAt = null;   // fresh state: drop the old claim delay
       S.myColor = !me ? null : (g.white === me.id ? "white" : (g.black === me.id ? "black" : null));
+      ensureNames();           // a player may have joined after the page opened
       derive(g);
       // game over or rollback: the staged premove is meaningless now
       if (g.status !== "active" || !S.myColor) clearPremoveState(false);
@@ -292,14 +294,33 @@
               data-clock="${color}">${U.fmtClock(ms)}</span>`;
     }
 
-    async function loadNames() {
-      // fetch both player profiles (public)
-      const ids = [S.g.white, S.g.black].filter(Boolean);
+    async function ensureNames(extraIds) {
+      // player profiles are public; the set grows when the opponent joins
+      // a waiting game after this page is already open, so the lookup
+      // re-runs whenever an unknown id appears (player bar and chat)
+      if (!S.g || S.destroyed) return;
+      const ids = [...new Set([...([S.g.white, S.g.black].filter(Boolean)), ...(extraIds || [])])];
       if (!ids.length) return;
-      const { data } = await API.sb.from("profiles").select("id,username,rating,is_banned").in("id", ids);
-      S.names = {}; S.ratings = {};
-      (data || []).forEach(p => { S.names[p.id] = p.username + (p.is_banned ? " 🚫" : ""); S.ratings[p.id] = p.rating; });
-      drawGame();
+      if (!S.names) { S.names = {}; S.ratings = {}; }
+      if (ids.every(id => S.names[id] !== undefined)) return;
+      if (S.namesBusy) { S.namesAgain = true; return; }
+      S.namesBusy = true;
+      do {
+        S.namesAgain = false;
+        const need = ids.filter(id => S.names[id] === undefined);
+        const { data } = await API.sb.from("profiles")
+          .select("id,username,rating,is_banned").in("id", need);
+        if (S.destroyed) { S.namesBusy = false; return; }
+        (data || []).forEach(p => {
+          S.names[p.id] = p.username + (p.is_banned ? " 🚫" : "");
+          S.ratings[p.id] = p.rating;
+        });
+        // a deleted profile stays unknown: mark it so the lookup stops
+        need.forEach(id => { if (S.names[id] === undefined) { S.names[id] = "?"; S.ratings[id] = ""; } });
+        drawGame();
+        renderChat();
+      } while (S.namesAgain);
+      S.namesBusy = false;
     }
 
     function movesList() {
@@ -481,9 +502,11 @@
             <button class="btn" id="copy-inv">${U.esc(t("game.copy"))}</button></div>
             <div class="game-actions"><button class="btn danger" id="cancel-wait">${U.esc(t("game.cancelChallenge"))}</button></div>` : ""}
           ${!me ? `<p>${U.esc(t("game.loginToJoin"))}</p>`
-                : (!S.myColor ? `<div class="game-actions">
-                    <button class="btn primary big" id="join-btn">${U.esc(t("game.join"))}</button>
-                  </div>` : "")}`;
+                : (!S.myColor ? (g.invitee && g.invitee !== me.id
+                    ? `<p class="muted small center">${U.esc(t("game.inviteOnlyHint"))}</p>`
+                    : `<div class="game-actions">
+                        <button class="btn primary big" id="join-btn">${U.esc(t("game.join"))}</button>
+                      </div>`) : "")}`;
         const joinBtn = U.qs("#join-btn", c);
         if (joinBtn) joinBtn.addEventListener("click", async () => {
           joinBtn.disabled = true;
@@ -752,6 +775,13 @@
     // game chat
     const chatCard = U.qs("#chat-card", root);
     const chatLog = U.qs("#chat-log", root);
+    function chatMsgEl(m) {
+      const nm = (m.p && m.p.username) || (S.names && S.names[m.user_id]) || "?";
+      const who = m.user_id
+        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a>`
+        : `<b>${U.esc(nm)}:</b>`;
+      return U.el(`<div class="chat-msg">${who} ${U.esc(m.body)}</div>`);
+    }
     function chatMsg(m) {
       if (S.chatSeen.has(m.id)) return; // realtime and polling may duplicate
       // own message already shown optimistically: treat the match as confirmation
@@ -764,14 +794,21 @@
         }
       }
       S.chatSeen.add(m.id);
-      const nm = (m.p && m.p.username) || (S.names && S.names[m.user_id]) || "?";
-      const who = m.user_id
-        ? `<a class="user-link" href="#/profile/${m.user_id}">${U.esc(nm)}:</a>`
-        : `<b>${U.esc(nm)}:</b>`;
-      const d = U.el(`<div class="chat-msg">${who} ${U.esc(m.body)}</div>`);
+      S.chatMsgs.push(m);
       const empty = chatLog.querySelector(".empty");
       if (empty) empty.remove();
-      chatLog.appendChild(d);
+      chatLog.appendChild(chatMsgEl(m));
+      chatLog.scrollTop = chatLog.scrollHeight;
+      // unknown author: the name fills in when the profile arrives
+      if (m.user_id && !(S.names && S.names[m.user_id])) ensureNames([m.user_id]);
+    }
+    // full rebuild from the stored messages; keeps optimistic entries,
+    // used when player names arrive after some messages were rendered
+    function renderChat() {
+      if (!S.chatMsgs.length) return;
+      chatLog.innerHTML = "";
+      for (const m of S.chatMsgs) chatLog.appendChild(chatMsgEl(m));
+      for (const p of S.chatPending) chatLog.appendChild(p.el);
       chatLog.scrollTop = chatLog.scrollHeight;
     }
     async function fetchNewChat() {
@@ -869,7 +906,7 @@
       if (NO_RT || !me || !S.g || !S.myColor || S.chatSub) return;
       S.chatSub = true;
       S.chans.push(API.subscribeChat(S.g.id, (row) => {
-        chatMsg({ ...row, p: { username: (S.names && S.names[row.user_id]) || (row.user_id === me.id ? myProfile.username : "?") } });
+        chatMsg(row); // the name resolves from S.names; ensureNames fills it in
         U.soundMove();
       }, (status) => {
         S.chatUp = (status === "SUBSCRIBED");
@@ -887,7 +924,7 @@
     }
     await applyState(data.game, false);
     ServerTime.sync();
-    await loadNames();
+    await ensureNames();
     await initChat();
     subscribe();
     initReplay(); // replay for finished games, local and RPC-free

@@ -108,6 +108,7 @@
   "game.cancelChallengeQ": "Отменить вызов?",
   "game.cancelChallengeText": "Партия будет удалена.",
   "game.loginToJoin": "Войдите, чтобы присоединиться к партии.",
+  "game.inviteOnlyHint": "Этот вызов адресный — принять его может только приглашённый игрок.",
   "game.join": "♟ Присоединиться к партии",
   "game.aborted": "Партия прервана",
   "game.draw": "Ничья",

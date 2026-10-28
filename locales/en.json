@@ -108,6 +108,7 @@
   "game.cancelChallengeQ": "Cancel the challenge?",
   "game.cancelChallengeText": "The game will be removed.",
   "game.loginToJoin": "Sign in to join the game.",
+  "game.inviteOnlyHint": "This challenge is addressed — only the invited player can accept it.",
   "game.join": "♟ Join the game",
   "game.aborted": "Game aborted",
   "game.draw": "Draw",
